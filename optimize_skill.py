@@ -312,8 +312,9 @@ def optimize_skill(
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable not set")
+    api_base = os.getenv("OPENAI_API_BASE", None)
 
-    lm = dspy.LM(model, api_key=api_key)
+    lm = dspy.LM(model, api_key=api_key, api_base=api_base)
     dspy.configure(lm=lm)
 
     if verbose:
@@ -355,6 +356,7 @@ def optimize_skill(
     reflection_lm = dspy.LM(
         model,
         api_key=api_key,
+        api_base=api_base,
         temperature=1.0,
         max_tokens=4096
     )

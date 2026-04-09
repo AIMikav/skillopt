@@ -13,6 +13,9 @@ uv sync
 ```bash
 # Set your OpenAI API key
 export OPENAI_API_KEY=your-api-key
+# Optional: Set your API base to use with other providers (e.g. vLLM, Ollama, llama.cpp)
+# IMPORTANT: Specify the model name with `--model openai/<model-name>` when running optimize_skill.py
+# export OPENAI_API_BASE=http://localhost:11434/v1
 
 # Analyze skill (dry run)
 uv run python optimize_skill.py <skill_directory> --dry-run

@@ -38,21 +38,27 @@ load_dotenv()
 class OptimizeSkillContent(dspy.Signature):
     """Optimize a Claude Agent Skill following best practices.
 
+    GOAL: The optimized skill must work exactly as the original. Reduce token usage
+    while preserving full functionality. Apply training examples and best practices
+    to create a well-structured, concise skill.
+
     PRESERVE:
-    - All code blocks (```bash, ```python, etc.) - these are essential commands
+    - Core functionality and workflow logic
+    - Essential code blocks (```bash, ```python, etc.)
     - Frontmatter (--- name/description ---)
     - Section headers (##)
-    - Useful technical content
+    - Unique instructions and commands
 
     REMOVE:
     - Filler phrases: "make sure to", "ensure that", "don't forget to", etc.
-    - Verbose explanations of common concepts (YAML, JSON, API definitions)
-    - Redundant command variations (consolidate same command for different namespaces)
+    - Verbose explanations of concepts Claude already knows (YAML, JSON, APIs)
+    - Repetitive instructions and duplicate commands
     - Unrelated content (e.g., PDF/Git commands in a Kubernetes skill)
     - Time-sensitive information
 
     CONSOLIDATE:
-    - Multiple similar commands into one with placeholder (e.g., -n <namespace>)
+    - Similar commands into one with placeholders (e.g., -n <namespace>)
+    - Repetitive steps into concise statements
     """
     original_content: str = dspy.InputField(desc="Original skill content with issues")
     issues_found: str = dspy.InputField(desc="List of issues identified in the skill")

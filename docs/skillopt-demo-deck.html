@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SkillOpt — GEPA-Powered Skill Optimization</title>
+  <link href="https://cdn.jsdelivr.net/npm/@rhds/tokens@3.0.2/css/global.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;500;700;900&family=Red+Hat+Text:wght@400;500;700&family=Red+Hat+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-primary: #000000;
+      --bg-secondary: #1f1f1f;
+      --bg-surface: #292929;
+      --text-primary: #ffffff;
+      --text-secondary: #c7c7c7;
+      --text-muted: #a3a3a3;
+      --accent: #ee0000;
+      --accent-dark: #a60000;
+      --accent-light: #f56e6e;
+      --tag-border: #383838;
+      --font-display: var(--rh-font-family-heading, 'Red Hat Display', sans-serif);
+      --font-body: var(--rh-font-family-body-text, 'Red Hat Text', sans-serif);
+      --font-mono: var(--rh-font-family-code, 'Red Hat Mono', monospace);
+    }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    .deck { position: relative; width: 100%; height: 100%; }
+
+    .slide {
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      padding: var(--rh-space-4xl, 80px) var(--rh-space-3xl, 64px);
+      height: 100vh;
+      width: 100vw;
+      position: relative;
+      overflow: hidden;
+      background: var(--bg-primary);
+    }
+    .slide.active { display: flex; }
+
+    .slide::before {
+      content: '';
+      position: absolute;
+      top: -20%;
+      right: -10%;
+      width: 60%;
+      height: 60%;
+      background: radial-gradient(ellipse, rgba(238,0,0,0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .slide > * { position: relative; z-index: 1; }
+
+    /* Typography */
+    h1 {
+      font-family: var(--font-display);
+      font-size: var(--rh-font-size-heading-2xl, 3rem);
+      font-weight: 900;
+      line-height: 1.1;
+      margin-bottom: var(--rh-space-lg, 24px);
+    }
+    h2 {
+      font-family: var(--font-display);
+      font-size: var(--rh-font-size-heading-lg, 2rem);
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: var(--rh-space-lg, 24px);
+    }
+    h3 {
+      font-family: var(--font-display);
+      font-size: var(--rh-font-size-heading-md, 1.5rem);
+      font-weight: 700;
+      margin-bottom: var(--rh-space-md, 16px);
+    }
+    .subtitle {
+      font-size: var(--rh-font-size-body-text-xl, 1.25rem);
+      color: var(--text-secondary);
+      max-width: 720px;
+      line-height: 1.6;
+      margin-bottom: var(--rh-space-xl, 32px);
+    }
+    .body-text {
+      font-size: var(--rh-font-size-body-text-lg, 1.125rem);
+      color: var(--text-secondary);
+      max-width: 800px;
+      line-height: 1.7;
+    }
+    .accent { color: var(--accent); }
+    .accent-light { color: var(--accent-light); }
+
+    /* Breadcrumb */
+    .breadcrumb {
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-xs, 0.75rem);
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: var(--rh-space-xl, 32px);
+      display: flex;
+      align-items: center;
+      gap: var(--rh-space-sm, 8px);
+    }
+
+    /* Slide label */
+    .slide-label {
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-xs, 0.75rem);
+      color: var(--accent);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: var(--rh-space-lg, 24px);
+    }
+
+    /* Tags */
+    .tags { display: flex; gap: var(--rh-space-sm, 8px); flex-wrap: wrap; margin-bottom: var(--rh-space-xl, 32px); }
+    .tag {
+      display: inline-block;
+      padding: var(--rh-space-xs, 4px) var(--rh-space-md, 16px);
+      border: var(--rh-border-width-sm, 1px) solid var(--tag-border);
+      border-radius: var(--rh-border-radius-pill, 64px);
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-xs, 0.75rem);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+    .tag.accent { border-color: var(--accent); color: var(--accent); }
+
+    /* Attribution */
+    .attribution {
+      font-family: var(--font-body);
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      color: var(--text-muted);
+      margin-top: auto;
+      padding-top: var(--rh-space-xl, 32px);
+    }
+    .source {
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-xs, 0.75rem);
+      color: var(--text-muted);
+      margin-top: auto;
+      padding-top: var(--rh-space-md, 16px);
+    }
+
+    /* Big number */
+    .big-number {
+      font-family: var(--font-display);
+      font-size: 5rem;
+      font-weight: 900;
+      color: var(--accent);
+      margin-bottom: var(--rh-space-md, 16px);
+    }
+    .big-context {
+      font-size: var(--rh-font-size-body-text-xl, 1.25rem);
+      color: var(--text-secondary);
+    }
+
+    /* Two columns */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--rh-space-2xl, 48px);
+      width: 100%;
+      max-width: 1100px;
+    }
+    .col { display: flex; flex-direction: column; gap: var(--rh-space-md, 16px); }
+
+    /* Feature list */
+    .feature-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: var(--rh-space-md, 16px);
+    }
+    .feature-list li {
+      font-size: var(--rh-font-size-body-text-lg, 1.125rem);
+      color: var(--text-secondary);
+      padding-left: var(--rh-space-lg, 24px);
+      position: relative;
+      line-height: 1.6;
+    }
+    .feature-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+    }
+
+    /* Architecture boxes */
+    .arch-flow {
+      display: flex;
+      align-items: center;
+      gap: var(--rh-space-md, 16px);
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      max-width: 1100px;
+    }
+    .arch-box {
+      background: rgba(41, 41, 41, 0.8);
+      border: 1px solid var(--tag-border);
+      border-radius: var(--rh-border-radius-default, 3px);
+      padding: var(--rh-space-md, 16px) var(--rh-space-lg, 24px);
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      text-align: center;
+      min-width: 120px;
+      box-shadow: var(--rh-box-shadow-sm, 0 2px 4px 0 rgba(21, 21, 21, 0.2));
+    }
+    .arch-box.highlight {
+      border-color: var(--accent);
+      background: rgba(238, 0, 0, 0.08);
+      color: var(--accent-light);
+    }
+    .arch-arrow {
+      font-size: 1.5rem;
+      color: var(--text-muted);
+    }
+
+    /* Metric bar */
+    .metric-row {
+      display: flex;
+      align-items: center;
+      gap: var(--rh-space-md, 16px);
+      margin-bottom: var(--rh-space-md, 16px);
+      width: 100%;
+      max-width: 700px;
+    }
+    .metric-label {
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      color: var(--text-secondary);
+      min-width: 160px;
+    }
+    .metric-bar-bg {
+      flex: 1;
+      height: 28px;
+      background: var(--bg-surface);
+      border-radius: var(--rh-border-radius-default, 3px);
+      overflow: hidden;
+      position: relative;
+    }
+    .metric-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent-dark), var(--accent));
+      border-radius: var(--rh-border-radius-default, 3px);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding-right: var(--rh-space-sm, 8px);
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-xs, 0.75rem);
+      color: white;
+      font-weight: 700;
+    }
+
+    /* Code block */
+    .code-block {
+      background: var(--bg-secondary);
+      border: 1px solid var(--tag-border);
+      border-radius: var(--rh-border-radius-default, 3px);
+      padding: var(--rh-space-lg, 24px);
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      color: var(--text-secondary);
+      line-height: 1.8;
+      max-width: 800px;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* Quote */
+    .quote {
+      font-family: var(--font-display);
+      font-size: var(--rh-font-size-heading-md, 1.5rem);
+      font-weight: 500;
+      color: var(--text-primary);
+      max-width: 720px;
+      line-height: 1.5;
+      position: relative;
+      padding-left: var(--rh-space-2xl, 48px);
+    }
+    .quote::before {
+      content: '\201C';
+      font-size: 6rem;
+      color: var(--accent);
+      opacity: 0.3;
+      position: absolute;
+      left: -10px;
+      top: -30px;
+      font-family: var(--font-display);
+    }
+
+    /* Logo */
+    .rh-logo { height: 28px; width: auto; }
+    .rh-logo.small { height: 20px; }
+    .rh-logo.large { height: 40px; }
+
+    /* Controls */
+    .controls {
+      position: fixed;
+      bottom: var(--rh-space-lg, 24px);
+      right: var(--rh-space-xl, 32px);
+      display: flex;
+      align-items: center;
+      gap: var(--rh-space-lg, 24px);
+      z-index: 100;
+    }
+    .nav-hint {
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-xs, 0.75rem);
+      color: var(--text-muted);
+      opacity: 0.5;
+    }
+    .progress {
+      font-family: var(--font-mono);
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      color: var(--text-muted);
+    }
+    .progress .current { color: var(--accent); font-weight: 700; }
+
+    /* Notes panel */
+    .notes-panel {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bg-secondary);
+      border-top: 2px solid var(--accent);
+      padding: var(--rh-space-lg, 24px) var(--rh-space-3xl, 64px);
+      font-family: var(--font-body);
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      color: var(--text-secondary);
+      line-height: 1.6;
+      max-height: 30vh;
+      overflow-y: auto;
+      z-index: 200;
+      transform: translateY(100%);
+      transition: transform 0.3s ease;
+    }
+    .notes-panel.visible { transform: translateY(0); }
+
+    /* Timeline / roadmap */
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      gap: var(--rh-space-lg, 24px);
+      max-width: 800px;
+    }
+    .timeline-item {
+      display: flex;
+      gap: var(--rh-space-lg, 24px);
+      align-items: flex-start;
+    }
+    .timeline-marker {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      margin-top: 6px;
+      flex-shrink: 0;
+    }
+    .timeline-marker.future {
+      background: transparent;
+      border: 2px solid var(--text-muted);
+    }
+    .timeline-content h3 {
+      font-size: var(--rh-font-size-body-text-lg, 1.125rem);
+      margin-bottom: var(--rh-space-xs, 4px);
+    }
+    .timeline-content p {
+      font-size: var(--rh-font-size-body-text-sm, 0.875rem);
+      color: var(--text-muted);
+    }
+
+    /* Animations */
+    .slide.active .animate-in {
+      animation: fadeSlideUp 0.6s ease-out forwards;
+      opacity: 0;
+    }
+    .slide.active .animate-in:nth-child(1) { animation-delay: 0s; }
+    .slide.active .animate-in:nth-child(2) { animation-delay: 0.1s; }
+    .slide.active .animate-in:nth-child(3) { animation-delay: 0.2s; }
+    .slide.active .animate-in:nth-child(4) { animation-delay: 0.3s; }
+    .slide.active .animate-in:nth-child(5) { animation-delay: 0.4s; }
+    .slide.active .animate-in:nth-child(6) { animation-delay: 0.5s; }
+    .slide.active .animate-in:nth-child(7) { animation-delay: 0.6s; }
+    .slide.active .animate-in:nth-child(8) { animation-delay: 0.7s; }
+
+    @keyframes fadeSlideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="deck">
+
+    <!-- SLIDE 1: TITLE -->
+    <div class="slide" data-notes="SkillOpt uses DSPy's GEPA (Greedy Evolutionary Prompt Adaptation) algorithm to optimize Claude Agent Skills. The tool is open source and runs locally with an OpenAI API key for the optimization LLM.">
+      <div class="breadcrumb animate-in">
+        <svg class="rh-logo small" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 613 145" role="img" aria-label="Red Hat">
+          <title>Red Hat</title>
+          <path d="M127.47,83.49c12.51,0,30.61-2.58,30.61-17.46a14,14,0,0,0-.31-3.42l-7.45-32.36c-1.72-7.12-3.23-10.35-15.73-16.6C124.89,8.69,103.76.5,97.51.5,91.69.5,90,8,83.06,8c-6.68,0-11.64-5.6-17.89-5.6-6,0-9.91,4.09-12.93,12.5,0,0-8.41,23.72-9.49,27.16A6.43,6.43,0,0,0,42.53,44c0,9.22,36.3,39.45,84.94,39.45M160,72.07c1.73,8.19,1.73,9.05,1.73,10.13,0,14-15.74,21.77-36.43,21.77C78.54,104,37.58,76.6,37.58,58.49a18.45,18.45,0,0,1,1.51-7.33C22.27,52,.5,55,.5,74.22c0,31.48,74.59,70.28,133.65,70.28,45.28,0,56.7-20.48,56.7-36.65,0-12.72-11-27.16-30.83-35.78" fill="#e00"/>
+          <path d="M160,72.07c1.73,8.19,1.73,9.05,1.73,10.13,0,14-15.74,21.77-36.43,21.77C78.54,104,37.58,76.6,37.58,58.49a18.45,18.45,0,0,1,1.51-7.33l3.66-9.06A6.43,6.43,0,0,0,42.53,44c0,9.22,36.3,39.45,84.94,39.45,12.51,0,30.61-2.58,30.61-17.46a14,14,0,0,0-.31-3.42Z"/>
+          <path d="M579.74,92.8c0,11.89,7.15,17.67,20.19,17.67a52.11,52.11,0,0,0,11.89-1.68V95a24.84,24.84,0,0,1-7.68,1.16c-5.37,0-7.36-1.68-7.36-6.73V68.3h15.56V54.1H596.78v-18l-17,3.68V54.1H568.49V68.3h11.25Zm-53,.32c0-3.68,3.69-5.47,9.26-5.47a43.12,43.12,0,0,1,10.1,1.26v7.15a21.51,21.51,0,0,1-10.63,2.63c-5.46,0-8.73-2.1-8.73-5.57m5.2,17.56c6,0,10.84-1.26,15.36-4.31v3.37h16.82V74.08c0-13.56-9.14-21-24.39-21-8.52,0-16.94,2-26,6.1l6.1,12.52c6.52-2.74,12-4.42,16.83-4.42,7,0,10.62,2.73,10.62,8.31v2.73a49.53,49.53,0,0,0-12.62-1.58c-14.31,0-22.93,6-22.93,16.73,0,9.78,7.78,17.24,20.19,17.24m-92.44-.94h18.09V80.92h30.29v28.82H506V36.12H487.93V64.41H457.64V36.12H439.55ZM370.62,81.87c0-8,6.31-14.1,14.62-14.1A17.22,17.22,0,0,1,397,72.09V91.54A16.36,16.36,0,0,1,385.24,96c-8.2,0-14.62-6.1-14.62-14.09m26.61,27.87h16.83V32.44l-17,3.68V57.05a28.3,28.3,0,0,0-14.2-3.68c-16.19,0-28.92,12.51-28.92,28.5a28.25,28.25,0,0,0,28.4,28.6,25.12,25.12,0,0,0,14.93-4.83ZM320,67c5.36,0,9.88,3.47,11.67,8.83H308.47C310.15,70.3,314.36,67,320,67M291.33,82c0,16.2,13.25,28.82,30.28,28.82,9.36,0,16.2-2.53,23.25-8.42l-11.26-10c-2.63,2.74-6.52,4.21-11.14,4.21a14.39,14.39,0,0,1-13.68-8.83h39.65V83.55c0-17.67-11.88-30.39-28.08-30.39a28.57,28.57,0,0,0-29,28.81M262,51.58c6,0,9.36,3.78,9.36,8.31S268,68.2,262,68.2H244.11V51.58Zm-36,58.16h18.09V82.92h13.77l13.89,26.82H292l-16.2-29.45a22.27,22.27,0,0,0,13.88-20.72c0-13.25-10.41-23.45-26-23.45H226Z" fill="#fff"/>
+        </svg>
+        <span>&#8250; ACE &middot; Emerging Technologies</span>
+      </div>
+      <div class="slide-label animate-in">&mdash;&mdash; SKILL OPTIMIZATION &middot; DEMO</div>
+      <h1 class="animate-in">Evolving Better <span class="accent">Agent Skills</span><br>With GEPA</h1>
+      <div class="subtitle animate-in">Automated skill optimization using evolutionary prompt adaptation, eval-driven metrics, and LLM-as-judge validation.</div>
+      <div class="tags animate-in">
+        <span class="tag accent">DSPy</span>
+        <span class="tag">GEPA</span>
+        <span class="tag">LLM-as-Judge</span>
+        <span class="tag">Eval-Driven</span>
+      </div>
+      <div class="attribution animate-in">SkillOpt &middot; GEPA Skill Optimizer</div>
+    </div>
+
+    <!-- SLIDE 2: THE PROBLEM -->
+    <div class="slide" data-notes="Skills accumulate cruft over time. Manual cleanup is tedious and error-prone &mdash; you might remove something essential while trimming. There's no systematic way to verify the skill still covers all use cases after editing.">
+      <div class="slide-label animate-in">&mdash;&mdash; THE PROBLEM</div>
+      <h2 class="animate-in">Agent Skills <span class="accent">Decay</span> Over Time</h2>
+      <ul class="feature-list animate-in">
+        <li><strong>Filler phrases accumulate</strong> &mdash; &ldquo;make sure to&rdquo;, &ldquo;ensure that&rdquo;, &ldquo;don&rsquo;t forget to&rdquo; add tokens without adding value</li>
+        <li><strong>Verbose by default</strong> &mdash; explaining concepts the model already knows wastes context window</li>
+        <li><strong>Redundant patterns</strong> &mdash; the same command repeated with minor variations instead of consolidated</li>
+        <li><strong>No verification</strong> &mdash; after trimming, how do you know the skill still handles every use case?</li>
+      </ul>
+    </div>
+
+    <!-- SLIDE 3: PURPOSE -->
+    <div class="slide" style="justify-content: center;" data-notes="SkillOpt exists to answer the question: can we make skills smaller without breaking them? The key insight is that optimization and validation must happen together &mdash; you can't just trim, you need to prove it still works.">
+      <div class="quote animate-in">Make skills <span class="accent">smaller</span> without breaking them &mdash; and <span class="accent">prove</span> they still work.</div>
+      <div class="body-text animate-in" style="margin-top: var(--rh-space-xl, 32px); padding-left: var(--rh-space-2xl, 48px);">SkillOpt couples optimization with validation. Every rewrite is tested against eval assertions before it can replace the original.</div>
+    </div>
+
+    <!-- SLIDE 4: HOW GEPA WORKS -->
+    <div class="slide" data-notes="GEPA is a DSPy optimizer that treats prompt instructions as evolvable programs. A reflection LM proposes rewrites, each candidate is scored, and only improvements are kept. SkillOpt adds skill-specific analysis and eval-based validation on top of this loop.">
+      <div class="slide-label animate-in">&mdash;&mdash; HOW IT WORKS</div>
+      <h2 class="animate-in">Evolutionary <span class="accent">Prompt Adaptation</span></h2>
+      <div class="body-text animate-in" style="margin-bottom: var(--rh-space-xl, 32px);">GEPA evolves the optimization instructions themselves. A reflection LM proposes rewrites, each candidate is scored, and only improvements survive.</div>
+      <div class="arch-flow animate-in">
+        <div class="arch-box">Current<br>Instructions</div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box highlight">Reflection LM<br><span style="font-size: 0.7rem; color: var(--accent-light);">proposes rewrite</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box">Score<br><span style="font-size: 0.7rem; color: var(--text-muted);">hybrid metric</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box">Keep if<br>Better</div>
+        <div class="arch-arrow" style="font-size: 1.2rem;">&circlearrowright;</div>
+      </div>
+      <div class="body-text animate-in" style="margin-top: var(--rh-space-2xl, 48px);">You define <em>what goes in and what comes out</em>. GEPA discovers <em>the best instructions in between</em>.</div>
+    </div>
+
+    <!-- SLIDE 5: WORKFLOW -->
+    <div class="slide" data-notes="The three-phase pipeline: (1) Parse the skill, analyze it, load or generate evals and assertions. (2) Run GEPA optimization with the hybrid metric over N iterations. (3) Validate the optimized skill against all assertions and save results.">
+      <div class="slide-label animate-in">&mdash;&mdash; WORKFLOW</div>
+      <h2 class="animate-in">Three-Phase <span class="accent">Pipeline</span></h2>
+      <div class="arch-flow animate-in" style="margin-top: var(--rh-space-xl, 32px);">
+        <div class="arch-box">Parse<br><span style="font-size: 0.7rem; color: var(--text-muted);">SKILL.md + refs</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box">Analyze<br><span style="font-size: 0.7rem; color: var(--text-muted);">best practices</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box">Load Evals<br><span style="font-size: 0.7rem; color: var(--text-muted);">or auto-generate</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box highlight">GEPA Optimize<br><span style="font-size: 0.7rem; color: var(--accent-light);">evolve &amp; score</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box">Validate<br><span style="font-size: 0.7rem; color: var(--text-muted);">LLM-as-judge</span></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box">Save<br><span style="font-size: 0.7rem; color: var(--text-muted);">SKILL.md + results</span></div>
+      </div>
+      <div class="body-text animate-in" style="margin-top: var(--rh-space-2xl, 48px);">
+        <strong>Phase 1:</strong> Parse the skill directory, run best-practices analysis, load or generate eval test cases with assertions.<br>
+        <strong>Phase 2:</strong> GEPA evolves the optimization prompt over multiple iterations, scored by the hybrid metric.<br>
+        <strong>Phase 3:</strong> Validate the optimized skill against every assertion. Output the result only if it passes.
+      </div>
+    </div>
+
+    <!-- SLIDE 6: EVALS & ASSERTIONS -->
+    <div class="slide" data-notes="Eval cases are realistic user prompts. Assertions are specific, verifiable claims. They can be hand-written for tighter control or auto-generated from the skill content. The key: assertions must be objective and verifiable, never subjective.">
+      <div class="slide-label animate-in">&mdash;&mdash; EVAL-DRIVEN</div>
+      <h2 class="animate-in">Test Cases Ground the <span class="accent">Optimization</span></h2>
+      <div class="two-col animate-in">
+        <div class="col">
+          <h3>What You Provide</h3>
+          <div class="body-text">Realistic user prompts that exercise different parts of the skill. What would someone actually ask?</div>
+          <div class="code-block" style="margin-top: var(--rh-space-md, 16px); font-size: 0.8rem;">"My pod shows CrashLoopBackOff.
+Help me figure out what's wrong."</div>
+        </div>
+        <div class="col">
+          <h3>What Gets Generated</h3>
+          <div class="body-text">Objective, verifiable assertions the optimized skill must still enable.</div>
+          <ul class="feature-list" style="margin-top: var(--rh-space-md, 16px);">
+            <li>Includes kubectl logs with --previous</li>
+            <li>Explains common CrashLoop causes</li>
+            <li>Suggests checking container-level logs</li>
+          </ul>
+        </div>
+      </div>
+      <div class="body-text animate-in" style="margin-top: var(--rh-space-lg, 24px);">No evals? Use <span class="accent">--generate-evals</span> &mdash; the tool creates test cases and assertions from the skill content itself.</div>
+    </div>
+
+    <!-- SLIDE 7: HYBRID METRIC -->
+    <div class="slide" data-notes="The hybrid metric prevents gaming. Static checks alone would reward stripping everything. LLM-judge alone would ignore bloat. Together they ensure the optimized skill is both concise and functionally complete.">
+      <div class="slide-label animate-in">&mdash;&mdash; HOW IT SCORES</div>
+      <h2 class="animate-in">Two Lenses, <span class="accent">One Score</span></h2>
+      <div class="two-col animate-in" style="margin-top: var(--rh-space-xl, 32px);">
+        <div class="col">
+          <h3>Static Analysis</h3>
+          <div class="body-text">Is the skill <em>well-written</em>?</div>
+          <ul class="feature-list" style="margin-top: var(--rh-space-md, 16px);">
+            <li>Filler phrases removed</li>
+            <li>Concise without over-trimming</li>
+            <li>Code blocks preserved</li>
+            <li>Structure intact (frontmatter, sections)</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>LLM-as-Judge</h3>
+          <div class="body-text">Does the skill <em>still work</em>?</div>
+          <ul class="feature-list" style="margin-top: var(--rh-space-md, 16px);">
+            <li>Each assertion evaluated independently</li>
+            <li>Strict: must contain actionable content</li>
+            <li>Returns PASS or FAIL with evidence</li>
+            <li>Prevents optimization from gutting functionality</li>
+          </ul>
+        </div>
+      </div>
+      <div class="body-text animate-in" style="margin-top: var(--rh-space-xl, 32px);">Neither lens alone is enough. Together they ensure the result is both <span class="accent">concise</span> and <span class="accent">correct</span>.</div>
+    </div>
+
+    <!-- SLIDE 8: DEMO -->
+    <div class="slide" data-notes="All commands go through main.py. The analyze subcommand is a dry run. optimize-evals is the recommended mode. --generate-evals removes the need for hand-written test cases. Also available as /skill-optimizer in Claude Code.">
+      <div class="slide-label animate-in">&mdash;&mdash; DEMO</div>
+      <h2 class="animate-in">Running <span class="accent">SkillOpt</span></h2>
+      <div class="code-block animate-in" style="margin-bottom: var(--rh-space-xl, 32px);"># Analyze a skill (dry run)
+python main.py analyze &lt;skill_directory&gt;
+
+# Optimize with auto-generated evals (recommended)
+python main.py optimize-evals &lt;skill_directory&gt; --generate-evals
+
+# Optimize with your own evals
+python main.py optimize-evals &lt;skill_directory&gt; --evals &lt;evals.json&gt;</div>
+      <div class="body-text animate-in">Also available as <span class="accent">/skill-optimizer</span> in Claude Code &mdash; point it at any skill directory and go.</div>
+    </div>
+
+    <!-- SLIDE 9: WHAT'S NEXT -->
+    <div class="slide" data-notes="Today we optimize skill content and validate with an LLM judge. The next step is to close the loop: run real agent sessions, score actual outputs, and feed that back into the optimizer.">
+      <div class="slide-label animate-in">&mdash;&mdash; WHAT&rsquo;S NEXT</div>
+      <h2 class="animate-in">From Skill Optimization to <span class="accent">Agent Eval</span></h2>
+      <div class="two-col animate-in" style="margin-top: var(--rh-space-xl, 32px);">
+        <div class="col">
+          <h3 class="accent">Today</h3>
+          <div class="body-text">Optimize the <em>skill document</em>. Judge whether it <em>could</em> enable the right response.</div>
+        </div>
+        <div class="col">
+          <h3>Next</h3>
+          <div class="body-text">Run real agent sessions. Score <em>actual outputs</em>. Feed results back into the optimizer.</div>
+        </div>
+      </div>
+      <div class="body-text animate-in" style="margin-top: var(--rh-space-2xl, 48px);">The goal: a closed-loop harness where GEPA evolves skills based on what agents <span class="accent">actually do</span>, not what they could do.</div>
+    </div>
+
+    <!-- SLIDE 13: THANK YOU -->
+    <div class="slide" style="align-items: center; text-align: center; justify-content: center;" data-notes="SkillOpt is available in the GEPA-optimization repository. Run /skill-optimizer in Claude Code to try it.">
+      <h1 class="animate-in">Thank <span class="accent">You</span></h1>
+      <div class="subtitle animate-in" style="text-align: center;">SkillOpt &mdash; GEPA-Powered Skill Optimization</div>
+      <div class="tags animate-in" style="justify-content: center;">
+        <span class="tag accent">Open Source</span>
+        <span class="tag">DSPy + GEPA</span>
+        <span class="tag">Eval-Driven</span>
+      </div>
+      <div style="margin-top: var(--rh-space-2xl, 48px);" class="animate-in">
+        <svg class="rh-logo large" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 613 145" role="img" aria-label="Red Hat">
+          <title>Red Hat</title>
+          <path d="M127.47,83.49c12.51,0,30.61-2.58,30.61-17.46a14,14,0,0,0-.31-3.42l-7.45-32.36c-1.72-7.12-3.23-10.35-15.73-16.6C124.89,8.69,103.76.5,97.51.5,91.69.5,90,8,83.06,8c-6.68,0-11.64-5.6-17.89-5.6-6,0-9.91,4.09-12.93,12.5,0,0-8.41,23.72-9.49,27.16A6.43,6.43,0,0,0,42.53,44c0,9.22,36.3,39.45,84.94,39.45M160,72.07c1.73,8.19,1.73,9.05,1.73,10.13,0,14-15.74,21.77-36.43,21.77C78.54,104,37.58,76.6,37.58,58.49a18.45,18.45,0,0,1,1.51-7.33C22.27,52,.5,55,.5,74.22c0,31.48,74.59,70.28,133.65,70.28,45.28,0,56.7-20.48,56.7-36.65,0-12.72-11-27.16-30.83-35.78" fill="#e00"/>
+          <path d="M160,72.07c1.73,8.19,1.73,9.05,1.73,10.13,0,14-15.74,21.77-36.43,21.77C78.54,104,37.58,76.6,37.58,58.49a18.45,18.45,0,0,1,1.51-7.33l3.66-9.06A6.43,6.43,0,0,0,42.53,44c0,9.22,36.3,39.45,84.94,39.45,12.51,0,30.61-2.58,30.61-17.46a14,14,0,0,0-.31-3.42Z"/>
+          <path d="M579.74,92.8c0,11.89,7.15,17.67,20.19,17.67a52.11,52.11,0,0,0,11.89-1.68V95a24.84,24.84,0,0,1-7.68,1.16c-5.37,0-7.36-1.68-7.36-6.73V68.3h15.56V54.1H596.78v-18l-17,3.68V54.1H568.49V68.3h11.25Zm-53,.32c0-3.68,3.69-5.47,9.26-5.47a43.12,43.12,0,0,1,10.1,1.26v7.15a21.51,21.51,0,0,1-10.63,2.63c-5.46,0-8.73-2.1-8.73-5.57m5.2,17.56c6,0,10.84-1.26,15.36-4.31v3.37h16.82V74.08c0-13.56-9.14-21-24.39-21-8.52,0-16.94,2-26,6.1l6.1,12.52c6.52-2.74,12-4.42,16.83-4.42,7,0,10.62,2.73,10.62,8.31v2.73a49.53,49.53,0,0,0-12.62-1.58c-14.31,0-22.93,6-22.93,16.73,0,9.78,7.78,17.24,20.19,17.24m-92.44-.94h18.09V80.92h30.29v28.82H506V36.12H487.93V64.41H457.64V36.12H439.55ZM370.62,81.87c0-8,6.31-14.1,14.62-14.1A17.22,17.22,0,0,1,397,72.09V91.54A16.36,16.36,0,0,1,385.24,96c-8.2,0-14.62-6.1-14.62-14.09m26.61,27.87h16.83V32.44l-17,3.68V57.05a28.3,28.3,0,0,0-14.2-3.68c-16.19,0-28.92,12.51-28.92,28.5a28.25,28.25,0,0,0,28.4,28.6,25.12,25.12,0,0,0,14.93-4.83ZM320,67c5.36,0,9.88,3.47,11.67,8.83H308.47C310.15,70.3,314.36,67,320,67M291.33,82c0,16.2,13.25,28.82,30.28,28.82,9.36,0,16.2-2.53,23.25-8.42l-11.26-10c-2.63,2.74-6.52,4.21-11.14,4.21a14.39,14.39,0,0,1-13.68-8.83h39.65V83.55c0-17.67-11.88-30.39-28.08-30.39a28.57,28.57,0,0,0-29,28.81M262,51.58c6,0,9.36,3.78,9.36,8.31S268,68.2,262,68.2H244.11V51.58Zm-36,58.16h18.09V82.92h13.77l13.89,26.82H292l-16.2-29.45a22.27,22.27,0,0,0,13.88-20.72c0-13.25-10.41-23.45-26-23.45H226Z" fill="#fff"/>
+        </svg>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="nav-hint">&larr; &rarr; or click to navigate &middot; N for notes</div>
+    <div class="progress"><span class="current">1</span> / <span class="total">13</span></div>
+  </div>
+
+  <!-- Notes panel -->
+  <div class="notes-panel"></div>
+
+  <script>
+    (function() {
+      const slides = document.querySelectorAll('.slide');
+      const currentEl = document.querySelector('.current');
+      const totalEl = document.querySelector('.total');
+      const notesPanel = document.querySelector('.notes-panel');
+      let idx = 0;
+      let notesVisible = false;
+
+      totalEl.textContent = slides.length;
+
+      function show(i) {
+        slides.forEach((s, j) => {
+          s.classList.toggle('active', j === i);
+          s.style.display = j === i ? 'flex' : 'none';
+        });
+        currentEl.textContent = i + 1;
+        if (notesVisible && notesPanel) {
+          const note = slides[i].dataset.notes || '';
+          notesPanel.innerHTML = note;
+        }
+      }
+
+      function next() { if (idx < slides.length - 1) { idx++; show(idx); } }
+      function prev() { if (idx > 0) { idx--; show(idx); } }
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); next(); }
+        if (e.key === 'ArrowLeft') { prev(); }
+        if (e.key === 'n' || e.key === 'N') {
+          notesVisible = !notesVisible;
+          if (notesPanel) notesPanel.classList.toggle('visible', notesVisible);
+          show(idx);
+        }
+      });
+
+      document.addEventListener('click', (e) => {
+        if (e.target.closest('.controls') || e.target.closest('.notes-panel')) return;
+        const x = e.clientX / window.innerWidth;
+        x > 0.5 ? next() : prev();
+      });
+
+      let touchStartX = 0;
+      document.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; });
+      document.addEventListener('touchend', (e) => {
+        const diff = e.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(diff) > 50) { diff < 0 ? next() : prev(); }
+      });
+
+      show(0);
+    })();
+  </script>
+</body>
+</html>

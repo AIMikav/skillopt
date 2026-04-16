@@ -1,0 +1,26 @@
+{
+  "skill_name": "kubernetes-ops",
+  "evals": [
+    {
+      "id": 1,
+      "name": "troubleshoot-crashloop",
+      "prompt": "hey i've got a pod called 'payment-service' in the production namespace that keeps restarting. it shows CrashLoopBackOff when i do kubectl get pods. can you help me figure out what's wrong?",
+      "expected_output": "Should diagnose CrashLoopBackOff by checking previous logs, describing the pod for events/exit codes, and explaining common causes",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "scale-deployment",
+      "prompt": "we're getting hammered with traffic right now. need to scale up the 'api-gateway' deployment in the staging namespace from 3 replicas to 10. what's the command for that?",
+      "expected_output": "Should provide kubectl scale command with correct syntax and explain why scaling helps distribute load",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "check-cluster-state",
+      "prompt": "just got access to a new k8s cluster for the first time. before i deploy anything, what should i check to understand what's already running there?",
+      "expected_output": "Should recommend checking current context, getting nodes, listing pods/deployments/services across namespaces, and explaining why this matters",
+      "files": []
+    }
+  ]
+}

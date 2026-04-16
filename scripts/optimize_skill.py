@@ -341,13 +341,15 @@ def optimize_skill(
         ).with_inputs("original_content", "issues_found")
     ]
 
-    # Load additional training examples if available
-    training_examples_path = Path(__file__).parent / "examples" / "training_examples.json"
+    # Load additional training examples from best practices
+    training_examples_path = Path(__file__).parent.parent / "examples" / "training_examples.json"
     if training_examples_path.exists():
         _, all_examples = load_training_examples(training_examples_path)
         best_practices_trainset = examples_to_dspy_trainset(all_examples)
+        trainset += best_practices_trainset
         if verbose:
-            print(f"Loaded {len(best_practices_trainset)} best practices examples")
+            print(f"Added {len(best_practices_trainset)} best practices examples to training set")
+            print(f"Total training examples: {len(trainset)}")
 
     # Initialize module
     skill_optimizer_module = SkillOptimizerModule()
@@ -358,7 +360,7 @@ def optimize_skill(
         api_key=api_key,
         api_base=api_base,
         temperature=1.0,
-        max_tokens=4096
+        max_tokens=4096,
     )
 
     # Initialize GEPA optimizer

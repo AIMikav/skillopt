@@ -1,6 +1,6 @@
 # SkillOpt
 
-SkillOpt optimizes Claude Agent Skills using DSPy's GEPA (Greedy Evolutionary Prompt Adaptation) algorithm. It analyzes skill files against best practices, removes filler phrases and verbose explanations, and consolidates redundant commands while preserving essential code blocks. The optimizer is trained on 30 curated bad/good example pairs covering conciseness, structure, and formatting patterns from official documentation. This achieves 50-70% token reduction without loss of functionality.
+SkillOpt optimizes Claude Agent Skills using DSPy's GEPA (Greedy Evolutionary Prompt Adaptation) algorithm. It analyzes skills against best practices, removes filler and verbose explanations, and consolidates redundant content while preserving code blocks and structure. Training data with bad/good example pairs teaches the optimizer what to fix.
 
 ## Installation
 
@@ -10,72 +10,76 @@ uv sync
 
 ## Usage
 
+Set your OpenAI API key before running:
+
 ```bash
-# Set your OpenAI API key
 export OPENAI_API_KEY=your-api-key
+
 # Optional: Set your API base to use with other providers (e.g. vLLM, Ollama, llama.cpp)
-# IMPORTANT: Specify the model name with `--model openai/<model-name>` when running optimize_skill.py
+# Specify the model name with --model openai/<model-name> when running
 # export OPENAI_API_BASE=http://localhost:11434/v1
-
-# Analyze skill (dry run)
-uv run python optimize_skill.py <skill_directory> --dry-run
-
-# Optimize skill
-uv run python optimize_skill.py <skill_directory> -o <output_directory>
 ```
 
-### Example
+All commands go through `main.py`:
 
 ```bash
-uv run python optimize_skill.py examples/example_1/Bad_Kubernetes_Helper_Skill -o examples/example_1/Optimized_Skill
+# Analyze a skill without optimizing
+uv run python main.py analyze <skill_directory>
+
+# Static-only optimization
+uv run python main.py optimize <skill_directory> -o <output_directory>
+
+# Eval-based optimization (recommended)
+uv run python main.py optimize-evals <skill_directory> --evals <evals.json>
+uv run python main.py optimize-evals <skill_directory> --generate-evals
+
+# Variance benchmark
+uv run python main.py benchmark <skill_directory> [--num-runs 10]
 ```
 
-### Options
+### Interactive notebooks
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `skill_path` | required | Path to skill directory |
-| `-o, --output` | `<skill>_GEPA_Optimized` | Output directory |
-| `--model` | `openai/gpt-4o` | OpenAI model to use |
-| `--max-evals` | `10` | Maximum GEPA evaluations |
-| `--content-limit` | `8000` | Character limit for training |
-| `--dry-run` | `false` | Analyze without optimizing |
-| `-q, --quiet` | `false` | Suppress output |
+Two Jupyter notebooks in `notebooks/` provide step-by-step walkthroughs:
+
+- **Static-only optimization** — uses the composite static metric (filler, conciseness, code blocks, structure)
+- **Eval-based optimization** — adds LLM-as-judge assertion scoring on top of static analysis
+
+Each subcommand documents its own flags:
+
+```bash
+uv run python main.py optimize --help
+uv run python main.py optimize-evals --help
+```
 
 ## How It Works
 
-1. **Parse** - Load skill directory and extract content
-2. **Analyze** - Check against Claude Agent Skills best practices
-3. **Optimize** - Use GEPA to evolve better prompts
-4. **Save** - Output optimized skill
+1. **Parse** — Load skill directory (SKILL.md + references) and extract content
+2. **Analyze** — Score against Claude Agent Skills best practices
+3. **Optimize** — GEPA evolves prompt instructions over multiple iterations, scored by the chosen metric
+4. **Validate** — (eval-based only) LLM-as-judge checks the optimized skill against all assertions
+5. **Save** — Output optimized SKILL.md and benchmark results
 
-### Training Set
+### Eval-based metric
 
-- 30 curated bad/good example pairs from Claude Agent Skills best practices
-- Covers 10 categories: conciseness, frontmatter, naming, structure, content, scripts, terminology, workflows, templates, paths
-- Includes 13 filler phrases to remove and 10 verbose patterns to simplify
+When using eval-based optimization, GEPA scores each candidate with:
 
-### Optimization Metric
+- **40% static analysis** — filler removal, conciseness, code-block preservation, structure
+- **60% assertion satisfaction** — an LLM judge evaluates whether the optimized skill enables handling every test case
 
-| Component | Weight | Description |
-|-----------|--------|-------------|
-| Filler removal | 25% | Remove "make sure to", "ensure that", etc. |
-| Code preservation | 25% | Keep code blocks intact |
-| Conciseness | 20% | Target 40-70% reduction |
-| Structure | 15% | Preserve frontmatter and sections |
-| Verbose removal | 15% | Remove acronym expansions |
+Assertions can be provided in the evals file or auto-generated (3-6 per test case, filtered for objectivity).
+
+### Variance benchmark
+
+The `benchmark` subcommand tests analyzer determinism by running multiple analysis passes and reporting score stability.
 
 ## Project Structure
 
 ```
-optimize_skill.py           # CLI script
-skillopt/
-├── skill_parser.py         # Parse skill directories
-├── skill_analyzer.py       # Analyze against best practices
-└── prompt_parser.py        # Parse prompt files
-examples/
-├── example_1/              # Example skill
-└── training_examples.json  # Training data
+main.py                  # CLI entry point (analyze, optimize, optimize-evals, benchmark)
+skillopt/                # Core library (parser, analyzer)
+scripts/                 # Optimization and benchmark scripts
+notebooks/               # Interactive Jupyter walkthroughs
+examples/                # Example skills, evals, and training data
 ```
 
 ## License

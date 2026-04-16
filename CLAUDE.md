@@ -1,35 +1,40 @@
 # SkillOpt - Skill Optimizer
 
-SkillOpt optimizes Claude Agent Skills using DSPy's GEPA optimizer and official best practices analysis.
+SkillOpt optimizes Claude Agent Skills using DSPy's GEPA optimizer and best practices analysis.
 
 ## Quick Start
 
-Open `gepa_skill_optimization.ipynb` and run the cells to:
+```bash
+export OPENAI_API_KEY=your-api-key
 
-1. Load a skill from `examples/`
-2. Analyze against best practices
-3. Run GEPA optimization with GPT-4o
-4. Save optimized skill
+# Analyze a skill
+uv run python main.py analyze <skill_directory>
 
-## Usage
+# Static-only optimization
+uv run python main.py optimize <skill_directory> -o <output_directory>
+
+# Eval-based optimization (recommended)
+uv run python main.py optimize-evals <skill_directory> --evals <evals.json>
+uv run python main.py optimize-evals <skill_directory> --generate-evals
+
+# Variance benchmark
+uv run python main.py benchmark <skill_directory>
+```
+
+The Jupyter notebook in `notebooks/` provides an interactive walkthrough.
+
+## Library usage
 
 ```python
 from skillopt import SkillParser, SkillAnalyzer
-import dspy
 
-# Parse skill
 parser = SkillParser()
-skill = parser.parse_directory("examples/Bad_Kubernetes_Helper_Skill")
+skill = parser.parse_directory("<skill_directory>")
 
-# Analyze against best practices
 analyzer = SkillAnalyzer()
 report = analyzer.analyze(skill)
 print(f"Score: {report.score}/100")
 print(f"Issues: {len(report.issues)}")
-
-# Configure DSPy and run GEPA (see notebook for full example)
-lm = dspy.LM("openai/gpt-4o", api_key="your-key")
-dspy.configure(lm=lm)
 ```
 
 ## Best Practices Checks
@@ -42,19 +47,9 @@ dspy.configure(lm=lm)
 | **Workflows** | Clear steps with checklists, validation feedback loops |
 | **Terminology** | Consistent terms throughout skill |
 
-## Training Examples
+## Optimization modes
 
-Best practices examples are in `examples/training_examples.json`:
-- 30 bad/good example pairs from official documentation
-- 13 filler phrases to remove
-- 10 verbose patterns to simplify
+- **Static-only** (`main.py optimize`) — composite metric: filler removal, conciseness, code-block preservation, structure
+- **Eval-based** (`main.py optimize-evals`) — 40% static + 60% LLM-as-judge assertion pass rate. Evals can be hand-written or auto-generated.
 
-## Files
-
-| File | Purpose |
-|------|---------|
-| `gepa_skill_optimization.ipynb` | Main notebook for GEPA optimization |
-| `examples/training_examples.json` | Best practices training data |
-| `examples/Bad_Kubernetes_Helper_Skill/` | Example bad skill (input) |
-| `examples/Bad_Kubernetes_Helper_Skill_GEPA_Optimized/` | Optimized output |
-| `skillopt/` | Core library (parser, analyzer) |
+Run any subcommand with `--help` for full CLI options.

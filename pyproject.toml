@@ -1,7 +1,7 @@
 [project]
 name = "skillopt"
 version = "0.3.0"
-description = "SkillOpt - Optimize Claude Agent Skills using DSPy and best practices"
+description = "SkillOpt - Optimize Claude Agent Skills using GEPA and best practices"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -12,7 +12,7 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
-    "dspy-ai>=2.0",
+    "gepa>=0.1.0",
     "openai>=1.0",
 ]
 

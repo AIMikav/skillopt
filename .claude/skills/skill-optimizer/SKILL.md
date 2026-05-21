@@ -7,31 +7,31 @@ allowed-tools: Bash Read Grep Glob
 
 # Skill Optimizer
 
-Optimize the Claude Agent Skill at `$ARGUMENTS` using DSPy's GEPA optimizer.
+Optimize the Claude Agent Skill at `$ARGUMENTS` using GEPA's optimize_anything API.
 
 ## Step 1: Parse arguments
 
 Parse `$ARGUMENTS` for:
-- **skill directory** (required) — path to directory containing a SKILL.md
-- **--evals <path>** (optional) — path to an evals.json file
-- **--generate-evals** (optional) — auto-generate evals from skill content
-- **--mode** (optional) — one of `analyze`, `optimize`, `optimize-evals` (default: ask)
-- **-o <path>** (optional) — output directory
+- **skill directory** (required) -- path to directory containing a SKILL.md
+- **--evals <path>** (optional) -- path to an evals.json file
+- **--generate-evals** (optional) -- auto-generate evals from skill content
+- **--mode** (optional) -- one of `analyze`, `optimize`, `optimize-evals` (default: ask)
+- **-o <path>** (optional) -- output directory
 
 If only a skill directory is provided, ask the user which mode to run:
-1. **Analyze** — score against best practices, no optimization
-2. **Optimize (static)** — GEPA with filler/conciseness/structure metric
-3. **Optimize with evals** (recommended) — GEPA with 40% static + 60% LLM-as-judge
+1. **Analyze** -- score against best practices, no optimization
+2. **Optimize (static)** -- evaluator scores filler/conciseness/structure/code-blocks
+3. **Optimize with evals** (recommended) -- 40% static + 60% LLM-as-judge assertions
 
 ## Step 2: Verify prerequisites
 
 - [ ] Confirm the skill directory exists and contains a SKILL.md
-- [ ] Confirm `OPENAI_API_KEY` is set in the environment
+- [ ] Confirm an API key is available (via `--api-key`, or env vars: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `API_KEY`)
 - [ ] If evals path was provided, confirm the file exists
+- [ ] Ask the user which LLM provider/model to use if not specified
 
 ```bash
 test -f "$SKILL_DIR/SKILL.md" && echo "SKILL.md found" || echo "ERROR: No SKILL.md"
-echo "OPENAI_API_KEY is ${OPENAI_API_KEY:+set}"
 ```
 
 ## Step 3: Analyze
@@ -53,19 +53,21 @@ If mode is `analyze`, stop here.
 
 Run the appropriate optimization:
 
+All commands accept `--model <provider/model>`, `--api-key <key>`, and `--api-base <url>`.
+
 **Static-only:**
 ```bash
-python main.py optimize <skill_directory> -o <output_directory>
+python main.py optimize <skill_directory> -o <output_directory> --model ollama/gemma3:4b --api-key ollama --api-base http://localhost:11434/v1
 ```
 
 **Eval-based with provided evals:**
 ```bash
-python main.py optimize-evals <skill_directory> --evals <evals_json_path> -o <output_directory>
+python main.py optimize-evals <skill_directory> --evals <evals_json_path> -o <output_directory> --model <provider/model> --api-key <key>
 ```
 
 **Eval-based with auto-generated evals:**
 ```bash
-python main.py optimize-evals <skill_directory> --generate-evals -o <output_directory>
+python main.py optimize-evals <skill_directory> --generate-evals -o <output_directory> --model <provider/model> --api-key <key>
 ```
 
 If no output directory was specified, the CLI defaults to `<skill_directory>_GEPA_Optimized` or `<skill_directory>_GEPA_Eval_Optimized`.
@@ -89,7 +91,7 @@ If the user wants to improve further:
 
 - Increase `--max-evals` for more GEPA iterations
 - Provide hand-written evals for tighter control
-- Try `--model openai/gpt-4o-mini` for faster iterations
+- Try a different `--model` (e.g. `ollama/gemma3:4b` for local, `openai/gpt-4o-mini` for fast cloud)
 
 ## Evals format
 
@@ -112,4 +114,4 @@ If the user wants to write custom evals, help them create a JSON file:
 }
 ```
 
-The `expectations` array is optional — if omitted, assertions are auto-generated (3-6 per case). Assertions must be objective ("includes the kubectl logs command"), not subjective ("is well-formatted").
+The `expectations` array is optional -- if omitted, assertions are auto-generated (3-6 per case). Assertions must be objective ("includes the kubectl logs command"), not subjective ("is well-formatted").

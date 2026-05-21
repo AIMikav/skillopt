@@ -2,7 +2,7 @@
 """
 GEPA Skill Optimization Script
 
-Optimize Claude Agent Skills using DSPy's GEPA optimizer.
+Optimize Claude Agent Skills using GEPA's optimize_anything API.
 
 Usage:
     python optimize_skill.py <skill_path> [options]
@@ -14,75 +14,37 @@ Examples:
 """
 
 import argparse
-import json
 import os
 import re
 import sys
 from pathlib import Path
 
-import dspy
-from dspy import GEPA
+import gepa.optimize_anything as oa
+from gepa.optimize_anything import optimize_anything, GEPAConfig, EngineConfig, ReflectionConfig
 from dotenv import load_dotenv
 
 from skillopt import SkillParser, SkillAnalyzer
 
 
-# Load environment variables
 load_dotenv()
-
-
-# ============================================================================
-# DSPy Module Definition
-# ============================================================================
-
-class OptimizeSkillContent(dspy.Signature):
-    """Optimize a Claude Agent Skill following best practices.
-
-    GOAL: The optimized skill must work exactly as the original. Reduce token usage
-    while preserving full functionality. Apply training examples and best practices
-    to create a well-structured, concise skill.
-
-    PRESERVE:
-    - Core functionality and workflow logic
-    - Essential code blocks (```bash, ```python, etc.)
-    - Frontmatter (--- name/description ---)
-    - Section headers (##)
-    - Unique instructions and commands
-
-    REMOVE:
-    - Filler phrases: "make sure to", "ensure that", "don't forget to", etc.
-    - Verbose explanations of concepts Claude already knows (YAML, JSON, APIs)
-    - Repetitive instructions and duplicate commands
-    - Unrelated content (e.g., PDF/Git commands in a Kubernetes skill)
-    - Time-sensitive information
-
-    CONSOLIDATE:
-    - Similar commands into one with placeholders (e.g., -n <namespace>)
-    - Repetitive steps into concise statements
-    """
-    original_content: str = dspy.InputField(desc="Original skill content with issues")
-    issues_found: str = dspy.InputField(desc="List of issues identified in the skill")
-    optimized_content: str = dspy.OutputField(desc="Optimized skill preserving code blocks but removing filler")
-
-
-class SkillOptimizerModule(dspy.Module):
-    """DSPy module for skill optimization that preserves code blocks."""
-
-    def __init__(self):
-        super().__init__()
-        self.optimizer = dspy.ChainOfThought(OptimizeSkillContent)
-
-    def forward(self, original_content: str, issues_found: str) -> str:
-        result = self.optimizer(
-            original_content=original_content,
-            issues_found=issues_found
-        )
-        return result.optimized_content
 
 
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+FILLER_PHRASES = [
+    'make sure to', 'ensure that', "don't forget to", 'remember to',
+    'it is important to', 'please note that', 'keep in mind',
+    'you should', 'you need to', 'you must',
+]
+
+VERBOSE_PATTERNS = [
+    'Portable Document Format', 'JavaScript Object Notation',
+    'Yet Another Markup Language', 'Application Programming Interface',
+    'is an open-source', 'is a system for',
+]
+
 
 def count_code_blocks(content: str) -> int:
     """Count number of code blocks in content."""
@@ -95,145 +57,97 @@ def extract_code_blocks(content: str) -> list[str]:
     return re.findall(pattern, content, re.DOTALL)
 
 
-def load_training_examples(json_path: Path, categories: list[str] = None):
-    """Load training examples from JSON file."""
-    if not json_path.exists():
-        return {"examples": []}, []
-
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    examples = data.get("examples", [])
-
-    if categories:
-        examples = [ex for ex in examples if ex.get("category") in categories]
-
-    return data, examples
-
-
-def examples_to_dspy_trainset(examples: list[dict]) -> list:
-    """Convert JSON examples to DSPy format."""
-    trainset = []
-
-    for ex in examples:
-        if "bad" not in ex or "good" not in ex:
-            continue
-
-        bad = ex["bad"]
-        good = ex["good"]
-
-        if isinstance(bad, dict):
-            bad_content = bad.get("content", "")
-            bad_issues = bad.get("issues", [])
-        else:
-            bad_content = str(bad)
-            bad_issues = []
-
-        if isinstance(good, dict):
-            good_content = good.get("content", "")
-        else:
-            good_content = str(good)
-
-        issues_str = "\n".join([
-            f"- [{ex.get('category', 'unknown')}] {issue}"
-            for issue in bad_issues
-        ])
-
-        if not issues_str:
-            issues_str = f"- [{ex.get('category', 'unknown')}] {ex.get('principle', 'Needs optimization')}"
-
-        dspy_example = dspy.Example(
-            original_content=bad_content,
-            issues_found=issues_str,
-            optimized_content=good_content,
-        ).with_inputs("original_content", "issues_found")
-
-        trainset.append(dspy_example)
-
-    return trainset
-
-
 # ============================================================================
-# Metric Function
+# Evaluator
 # ============================================================================
 
-def skill_optimization_metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
-    """Evaluate skill optimization quality.
+def create_skill_evaluator(original_content: str):
+    """Create an evaluator closure that scores optimized skill candidates.
 
-    Scoring:
+    Scoring weights:
     - 25% Filler phrase removal
-    - 20% Conciseness (but not too aggressive)
-    - 25% Code block preservation (CRITICAL)
+    - 20% Conciseness (target 40-70% reduction)
+    - 25% Code block preservation
     - 15% Structure preserved (frontmatter, sections)
     - 15% Verbose explanations removed
-
-    Returns:
-        float: Score between 0 and 1
     """
-    optimized = pred.optimized_content if hasattr(pred, 'optimized_content') else str(pred)
-    original_content = gold.original_content if hasattr(gold, 'original_content') else ""
-
-    score = 0.0
-
-    # 1. Filler phrase removal (25%)
-    filler_phrases = ['make sure to', 'ensure that', "don't forget to", 'remember to',
-                      'it is important to', 'please note that', 'keep in mind',
-                      'you should', 'you need to', 'you must']
-    filler_count = sum(1 for phrase in filler_phrases if phrase.lower() in optimized.lower())
-    filler_score = max(0, 1 - (filler_count / 5))
-    score += 0.25 * filler_score
-
-    # 2. Conciseness - target 40-70% reduction, penalize over-reduction (20%)
-    original_len = len(original_content) if original_content else 1
-    optimized_len = len(optimized)
-    if optimized_len < original_len:
-        reduction_ratio = 1 - (optimized_len / original_len)
-        if reduction_ratio < 0.4:
-            concise_score = reduction_ratio / 0.4
-        elif reduction_ratio <= 0.7:
-            concise_score = 1.0
-        else:
-            concise_score = max(0, 1 - (reduction_ratio - 0.7) * 3)
-    else:
-        concise_score = 0.0
-    score += 0.20 * concise_score
-
-    # 3. Code block preservation - CRITICAL (25%)
+    original_len = len(original_content)
     original_blocks = count_code_blocks(original_content)
-    optimized_blocks = count_code_blocks(optimized)
 
-    if original_blocks > 0:
-        block_ratio = optimized_blocks / original_blocks
-        if block_ratio >= 0.5:
-            code_score = min(1.0, block_ratio)
+    def evaluate(candidate: str) -> tuple[float, dict]:
+        score = 0.0
+        feedback = {}
+
+        # 1. Filler phrase removal (25%)
+        found_fillers = [p for p in FILLER_PHRASES if p.lower() in candidate.lower()]
+        filler_count = len(found_fillers)
+        filler_score = max(0, 1 - (filler_count / 5))
+        score += 0.25 * filler_score
+        feedback["filler_phrases"] = (
+            f"Found {filler_count}: {found_fillers}" if found_fillers else "None found"
+        )
+
+        # 2. Conciseness — target 40-70% reduction (20%)
+        optimized_len = len(candidate)
+        if optimized_len < original_len:
+            reduction_ratio = 1 - (optimized_len / original_len)
+            if reduction_ratio < 0.4:
+                concise_score = reduction_ratio / 0.4
+            elif reduction_ratio <= 0.7:
+                concise_score = 1.0
+            else:
+                concise_score = max(0, 1 - (reduction_ratio - 0.7) * 3)
         else:
-            code_score = block_ratio * 0.5
-    else:
-        code_score = 1.0 if optimized_blocks == 0 else 0.8
-    score += 0.25 * code_score
+            reduction_ratio = 0.0
+            concise_score = 0.0
+        score += 0.20 * concise_score
+        feedback["size_reduction"] = f"{reduction_ratio * 100:.1f}% (target: 40-70%)"
 
-    # 4. Structure preserved - frontmatter and sections (15%)
-    has_frontmatter = optimized.strip().startswith('---')
-    has_sections = '## ' in optimized
-    has_code = '```' in optimized
-    structure_score = (
-        (0.4 if has_frontmatter else 0) +
-        (0.3 if has_sections else 0) +
-        (0.3 if has_code else 0)
-    )
-    score += 0.15 * structure_score
+        # 3. Code block preservation (25%)
+        opt_blocks = count_code_blocks(candidate)
+        if original_blocks > 0:
+            block_ratio = opt_blocks / original_blocks
+            if block_ratio >= 0.5:
+                code_score = min(1.0, block_ratio)
+            else:
+                code_score = block_ratio * 0.5
+        else:
+            code_score = 1.0 if opt_blocks == 0 else 0.8
+        score += 0.25 * code_score
+        feedback["code_blocks"] = f"preserved {opt_blocks}/{original_blocks}"
 
-    # 5. Verbose explanations removed (15%)
-    verbose_patterns = [
-        'Portable Document Format', 'JavaScript Object Notation',
-        'Yet Another Markup Language', 'Application Programming Interface',
-        'is an open-source', 'is a system for'
-    ]
-    verbose_count = sum(1 for p in verbose_patterns if p.lower() in optimized.lower())
-    verbose_score = max(0, 1 - (verbose_count / 3))
-    score += 0.15 * verbose_score
+        # 4. Structure preserved (15%)
+        has_frontmatter = candidate.strip().startswith('---')
+        has_sections = '## ' in candidate
+        has_code = '```' in candidate
+        structure_score = (
+            (0.4 if has_frontmatter else 0) +
+            (0.3 if has_sections else 0) +
+            (0.3 if has_code else 0)
+        )
+        score += 0.15 * structure_score
+        feedback["structure"] = (
+            f"frontmatter={'yes' if has_frontmatter else 'MISSING'}, "
+            f"sections={'yes' if has_sections else 'MISSING'}, "
+            f"code={'yes' if has_code else 'MISSING'}"
+        )
 
-    return score
+        # 5. Verbose explanations removed (15%)
+        found_verbose = [p for p in VERBOSE_PATTERNS if p.lower() in candidate.lower()]
+        verbose_count = len(found_verbose)
+        verbose_score = max(0, 1 - (verbose_count / 3))
+        score += 0.15 * verbose_score
+        feedback["verbose_explanations"] = (
+            f"Found {verbose_count}: {found_verbose}" if found_verbose else "None found"
+        )
+
+        oa.log(f"Score: {score:.3f} | Size: {feedback['size_reduction']} | "
+               f"Filler: {filler_count} | Code: {feedback['code_blocks']} | "
+               f"Verbose: {verbose_count}")
+
+        return score, feedback
+
+    return evaluate
 
 
 # ============================================================================
@@ -247,28 +161,28 @@ def optimize_skill(
     max_evals: int = 10,
     content_limit: int = 8000,
     dry_run: bool = False,
-    verbose: bool = True
+    verbose: bool = True,
+    api_key: str = None,
+    api_base: str = None,
 ) -> dict:
     """
-    Optimize a Claude Agent Skill using GEPA.
+    Optimize a Claude Agent Skill using GEPA's optimize_anything.
 
     Args:
         skill_path: Path to the skill directory
         output_path: Path to save optimized skill (optional)
-        model: OpenAI model to use
-        max_evals: Maximum GEPA evaluations
-        content_limit: Character limit for training content
+        model: LLM model to use (litellm format, e.g. openai/gpt-4o)
+        max_evals: Maximum GEPA metric calls
+        content_limit: Character limit for skill content
         dry_run: If True, only analyze without optimizing
         verbose: Print progress information
 
     Returns:
         dict with optimization results
     """
-    # Initialize parser and analyzer
     parser = SkillParser()
     analyzer = SkillAnalyzer()
 
-    # Parse the skill
     if not skill_path.exists():
         raise FileNotFoundError(f"Skill not found at: {skill_path}")
 
@@ -279,7 +193,6 @@ def optimize_skill(
         print(f"  Lines: {skill.total_lines}")
         print(f"  References: {len(skill.references)}")
 
-    # Analyze skill
     report = analyzer.analyze(skill)
 
     if verbose:
@@ -299,28 +212,17 @@ def optimize_skill(
         if verbose:
             print("\nDry run - showing issues only:")
             for issue in report.issues[:15]:
-                icon = {"error": "[ERR]", "warning": "[WRN]", "suggestion": "[SUG]"}.get(issue.severity, "[?]")
+                icon = {"error": "[ERR]", "warning": "[WRN]", "suggestion": "[SUG]"}.get(
+                    issue.severity, "[?]"
+                )
                 print(f"  {icon} {issue.category}: {issue.message}")
         return {
             "skill": skill,
             "report": report,
             "optimized_content": None,
-            "dry_run": True
+            "dry_run": True,
         }
 
-    # Configure DSPy
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable not set")
-    api_base = os.getenv("OPENAI_API_BASE", None)
-
-    lm = dspy.LM(model, api_key=api_key, api_base=api_base)
-    dspy.configure(lm=lm)
-
-    if verbose:
-        print(f"\nConfigured DSPy with: {lm.model}")
-
-    # Prepare training data
     issues_str = "\n".join([
         f"- [{issue.severity}] {issue.category}: {issue.message}"
         for issue in report.issues[:20]
@@ -330,72 +232,66 @@ def optimize_skill(
     original_code_blocks = count_code_blocks(skill_content)
 
     if verbose:
-        print(f"\nTraining content: {len(skill_content):,} chars")
+        print(f"\nSkill content: {len(skill_content):,} chars")
         print(f"Code blocks found: {original_code_blocks}")
 
-    # Create training example
-    trainset = [
-        dspy.Example(
-            original_content=skill_content,
-            issues_found=issues_str
-        ).with_inputs("original_content", "issues_found")
-    ]
-
-    # Load additional training examples from best practices
-    training_examples_path = Path(__file__).parent.parent / "examples" / "training_examples.json"
-    if training_examples_path.exists():
-        _, all_examples = load_training_examples(training_examples_path)
-        best_practices_trainset = examples_to_dspy_trainset(all_examples)
-        trainset += best_practices_trainset
-        if verbose:
-            print(f"Added {len(best_practices_trainset)} best practices examples to training set")
-            print(f"Total training examples: {len(trainset)}")
-
-    # Initialize module
-    skill_optimizer_module = SkillOptimizerModule()
-
-    # Create reflection LM
-    reflection_lm = dspy.LM(
-        model,
-        api_key=api_key,
-        api_base=api_base,
-        temperature=1.0,
-        max_tokens=4096,
+    # Build objective and background for GEPA reflection
+    objective = (
+        "Optimize this Claude Agent Skill (SKILL.md) to reduce token usage while "
+        "preserving full functionality. Remove filler phrases, verbose explanations, "
+        "and redundant content. Preserve all code blocks, YAML frontmatter, and "
+        "section headers. Consolidate similar commands using placeholders. "
+        "The output must be a complete, valid SKILL.md file."
     )
 
-    # Initialize GEPA optimizer
-    gepa_optimizer = GEPA(
-        metric=skill_optimization_metric,
-        reflection_lm=reflection_lm,
-        max_full_evals=max_evals,
-        num_threads=1,
-        reflection_minibatch_size=3,
-        skip_perfect_score=True,
+    background = (
+        f"Issues found by the skill analyzer:\n{issues_str}\n\n"
+        "Best practices for Claude Agent Skills:\n"
+        "- Remove filler phrases: 'make sure to', 'ensure that', 'don't forget to', "
+        "'remember to', 'it is important to', 'please note that', 'keep in mind'\n"
+        "- Don't explain concepts Claude already knows (YAML, JSON, APIs, Kubernetes, etc.)\n"
+        "- Keep YAML frontmatter (--- name/description ---), section headers (##), "
+        "and all code blocks (```)\n"
+        "- Consolidate similar commands using placeholders (e.g., -n <namespace>)\n"
+        "- Target 40-70% size reduction — not more, not less\n"
+        "- Preserve core functionality and workflow logic"
     )
+
+    evaluator = create_skill_evaluator(skill_content)
 
     if verbose:
-        print(f"\nRunning GEPA optimization...")
+        print(f"\nRunning GEPA optimize_anything (max_metric_calls={max_evals})...")
         print("=" * 50)
 
-    # Compile/optimize the module
-    optimized_module = gepa_optimizer.compile(
-        student=skill_optimizer_module,
-        trainset=trainset,
+    if api_key:
+        os.environ.setdefault("OPENAI_API_KEY", api_key)
+    if api_base:
+        os.environ.setdefault("OPENAI_API_BASE", api_base)
+
+    result = optimize_anything(
+        seed_candidate=skill_content,
+        evaluator=evaluator,
+        objective=objective,
+        background=background,
+        config=GEPAConfig(
+            engine=EngineConfig(
+                max_metric_calls=max_evals,
+                display_progress_bar=verbose,
+            ),
+            reflection=ReflectionConfig(
+                reflection_lm=model,
+                skip_perfect_score=True,
+                perfect_score=1.0,
+            ),
+        ),
     )
+
+    optimized_content = result.best_candidate
+    if isinstance(optimized_content, dict):
+        optimized_content = list(optimized_content.values())[0]
 
     if verbose:
         print("GEPA optimization complete")
-
-    # Apply optimized module
-    if verbose:
-        print(f"\nApplying optimized module...")
-
-    gepa_result = optimized_module(
-        original_content=skill_content,
-        issues_found=issues_str
-    )
-
-    optimized_content = gepa_result.optimized_content if hasattr(gepa_result, 'optimized_content') else str(gepa_result)
 
     # Calculate metrics
     original_len = len(skill_content)
@@ -406,27 +302,16 @@ def optimize_skill(
     orig_blocks = count_code_blocks(skill_content)
     opt_blocks = count_code_blocks(optimized_content)
 
+    metric_score, _ = evaluator(optimized_content)
+
     if verbose:
         print(f"\nResults:")
         print(f"  Original: {original_len:,} chars, {orig_blocks} code blocks")
         print(f"  Optimized: {optimized_len:,} chars, {opt_blocks} code blocks")
         print(f"  Reduction: {reduction:,} chars ({reduction_pct:.1f}%)")
         print(f"  Code blocks preserved: {opt_blocks}/{orig_blocks}")
-
-    # Calculate final metric score
-    class PredictionWrapper:
-        def __init__(self, content):
-            self.optimized_content = content
-
-    metric_score = skill_optimization_metric(
-        gold=trainset[0],
-        pred=PredictionWrapper(optimized_content)
-    )
-
-    if verbose:
         print(f"  Metric score: {metric_score:.2f}")
 
-    # Save optimized skill
     if output_path:
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -447,7 +332,7 @@ def optimize_skill(
         "original_code_blocks": orig_blocks,
         "optimized_code_blocks": opt_blocks,
         "metric_score": metric_score,
-        "output_path": output_path
+        "output_path": output_path,
     }
 
 
@@ -457,7 +342,7 @@ def optimize_skill(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Optimize Claude Agent Skills using DSPy's GEPA optimizer",
+        description="Optimize Claude Agent Skills using GEPA optimizer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -471,52 +356,63 @@ Examples:
     parser.add_argument(
         "skill_path",
         type=Path,
-        help="Path to the skill directory to optimize"
+        help="Path to the skill directory to optimize",
     )
 
     parser.add_argument(
         "-o", "--output",
         type=Path,
         default=None,
-        help="Output directory for optimized skill (default: <skill_path>_GEPA_Optimized)"
+        help="Output directory for optimized skill (default: <skill_path>_GEPA_Optimized)",
     )
 
     parser.add_argument(
         "--model",
         type=str,
         default="openai/gpt-4o",
-        help="OpenAI model to use (default: openai/gpt-4o)"
+        help="LLM model to use in litellm format (default: openai/gpt-4o)",
     )
 
     parser.add_argument(
         "--max-evals",
         type=int,
         default=10,
-        help="Maximum GEPA evaluations (default: 10)"
+        help="Maximum GEPA metric calls (default: 10)",
     )
 
     parser.add_argument(
         "--content-limit",
         type=int,
         default=8000,
-        help="Character limit for training content (default: 8000)"
+        help="Character limit for skill content (default: 8000)",
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Analyze skill without optimizing"
+        help="Analyze skill without optimizing",
+    )
+
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="API key (default: OPENAI_API_KEY or API_KEY env var)",
+    )
+
+    parser.add_argument(
+        "--api-base",
+        default=None,
+        help="API base URL for OpenAI-compatible endpoints (e.g. http://localhost:11434/v1 for Ollama)",
     )
 
     parser.add_argument(
         "-q", "--quiet",
         action="store_true",
-        help="Suppress verbose output"
+        help="Suppress verbose output",
     )
 
     args = parser.parse_args()
 
-    # Set default output path
     if args.output is None and not args.dry_run:
         args.output = Path(f"{args.skill_path}_GEPA_Optimized")
 
@@ -528,7 +424,9 @@ Examples:
             max_evals=args.max_evals,
             content_limit=args.content_limit,
             dry_run=args.dry_run,
-            verbose=not args.quiet
+            verbose=not args.quiet,
+            api_key=args.api_key,
+            api_base=args.api_base,
         )
 
         if not args.quiet:

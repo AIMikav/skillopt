@@ -2,7 +2,7 @@
 """
 GEPA Skill Optimization with Eval-Based Metric
 
-Optimizes Claude Agent Skills using DSPy's GEPA optimizer with evaluation
+Optimizes Claude Agent Skills using GEPA's optimize_anything API with evaluation
 test cases and assertions as the optimization target.
 
 Three-phase pipeline:
@@ -29,13 +29,86 @@ import re
 import sys
 from pathlib import Path
 
-import dspy
-from dspy import GEPA
+import gepa.optimize_anything as oa
+from gepa.optimize_anything import optimize_anything, GEPAConfig, EngineConfig, ReflectionConfig
+from openai import OpenAI
 from dotenv import load_dotenv
 
 from skillopt import SkillParser, SkillAnalyzer
 
 load_dotenv()
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def strip_provider_prefix(model: str) -> str:
+    """Strip provider prefix (e.g. 'openai/', 'ollama/') for direct OpenAI SDK usage."""
+    if "/" in model:
+        return model.split("/", 1)[1]
+    return model
+
+
+def _get_openai_client(api_key: str = None, api_base: str = None) -> OpenAI:
+    key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
+    base = api_base or os.getenv("OPENAI_API_BASE") or os.getenv("API_BASE")
+    if not key:
+        raise ValueError(
+            "No API key found. Provide --api-key or set one of: "
+            "OPENAI_API_KEY, GEMINI_API_KEY, API_KEY"
+        )
+    kwargs = {"api_key": key}
+    if base:
+        kwargs["base_url"] = base
+    return OpenAI(**kwargs)
+
+
+def _chat(client: OpenAI, model: str, prompt: str, temperature: float = 0.7) -> str:
+    """Single-turn chat completion, returns content string."""
+    response = client.chat.completions.create(
+        model=strip_provider_prefix(model),
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+    )
+    return response.choices[0].message.content
+
+
+def _parse_json_or_lines(text: str) -> list:
+    """Parse a JSON array from text, falling back to extracting lines."""
+    # Try direct JSON parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict) and "assertions" in parsed:
+            return parsed["assertions"]
+        return []
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting JSON array from markdown code block
+    match = re.search(r'```(?:json)?\s*\n(\[.*?\])\s*\n```', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Try finding a bare JSON array
+    match = re.search(r'\[.*\]', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: extract lines
+    return [
+        line.strip().lstrip("-*").strip()
+        for line in text.strip().split("\n")
+        if line.strip() and len(line.strip()) > 10
+    ]
 
 
 # ============================================================================
@@ -48,89 +121,71 @@ def load_evals(evals_path: Path) -> dict:
         return json.load(f)
 
 
-class GenerateAssertions(dspy.Signature):
-    """Generate verifiable assertions for a skill evaluation test case.
-
-    Given a skill's content and an evaluation prompt, generate specific,
-    objectively verifiable assertions that a correct response should satisfy.
-
-    Good assertions:
-    - "The response includes the kubectl logs command"
-    - "The response mentions checking pod events with kubectl describe"
-    - "The response explains at least two common causes of CrashLoopBackOff"
-
-    Bad assertions (too subjective):
-    - "The output is well-formatted"
-    - "The response is helpful"
-    """
-    skill_content: str = dspy.InputField(desc="The SKILL.md content")
-    eval_prompt: str = dspy.InputField(desc="The user's task prompt")
-    expected_output: str = dspy.InputField(desc="Description of expected result")
-    assertions: str = dspy.OutputField(
-        desc='JSON array of 3-6 verifiable assertion strings, e.g. ["assertion 1", "assertion 2"]'
-    )
-
-
-class GenerateEvalCases(dspy.Signature):
-    """Generate evaluation test cases for a Claude Agent Skill.
-
-    Create 3 realistic test prompts a user would actually say. Cover
-    different aspects of the skill. Make prompts specific and detailed
-    with context (file paths, names, scenarios), not generic requests.
-    """
-    skill_content: str = dspy.InputField(desc="The skill's SKILL.md content")
-    skill_name: str = dspy.InputField(desc="Name of the skill")
-    test_cases: str = dspy.OutputField(
-        desc='JSON: {"evals": [{"id": 1, "name": "short-name", "prompt": "realistic user prompt", "expected_output": "description of success"}]}'
-    )
-
-
-def generate_assertions_for_evals(evals_data: dict, skill_content: str, verbose: bool = False) -> dict:
+def generate_assertions_for_evals(
+    evals_data: dict, skill_content: str, model: str = "openai/gpt-4", verbose: bool = False,
+    api_key: str = None, api_base: str = None,
+) -> dict:
     """Generate assertions for eval cases that don't already have them."""
-    generator = dspy.ChainOfThought(GenerateAssertions)
+    client = _get_openai_client(api_key=api_key, api_base=api_base)
 
     for eval_case in evals_data.get("evals", []):
-        existing = eval_case.get("expectations", [])
-        if existing:
+        if eval_case.get("expectations"):
             continue
 
         if verbose:
             print(f"    Generating assertions for eval {eval_case.get('id')}...")
 
-        result = generator(
-            skill_content=skill_content[:6000],
-            eval_prompt=eval_case["prompt"],
-            expected_output=eval_case.get("expected_output", ""),
+        prompt = (
+            "Generate verifiable assertions for a skill evaluation test case.\n\n"
+            "Given a skill's content and an evaluation prompt, generate specific, "
+            "objectively verifiable assertions that a correct response should satisfy.\n\n"
+            "Good assertions:\n"
+            '- "The response includes the kubectl logs command"\n'
+            '- "The response mentions checking pod events with kubectl describe"\n'
+            '- "The response explains at least two common causes of CrashLoopBackOff"\n\n'
+            "Bad assertions (too subjective):\n"
+            '- "The output is well-formatted"\n'
+            '- "The response is helpful"\n\n'
+            f"Skill content:\n{skill_content[:6000]}\n\n"
+            f"User task prompt: {eval_case['prompt']}\n"
+            f"Expected output: {eval_case.get('expected_output', '')}\n\n"
+            "Return a JSON array of 4-6 verifiable assertion strings.\n"
+            'Example: ["assertion 1", "assertion 2"]'
         )
 
-        try:
-            parsed = json.loads(result.assertions)
-            if isinstance(parsed, list):
-                eval_case["expectations"] = parsed
-            else:
-                eval_case["expectations"] = []
-        except json.JSONDecodeError:
-            # Extract lines as assertions
-            lines = [
-                l.strip().lstrip("-*").strip()
-                for l in result.assertions.strip().split("\n")
-                if l.strip() and len(l.strip()) > 10
-            ]
-            eval_case["expectations"] = lines
+        response_text = _chat(client, model, prompt)
+        eval_case["expectations"] = _parse_json_or_lines(response_text)
 
     return evals_data
 
 
-def auto_generate_evals(skill_content: str, skill_name: str, verbose: bool = False) -> dict:
+def auto_generate_evals(
+    skill_content: str, skill_name: str, model: str = "openai/gpt-4o", verbose: bool = False,
+    api_key: str = None, api_base: str = None,
+) -> dict:
     """Auto-generate eval cases from skill content using LLM."""
     if verbose:
         print("  Generating eval test cases from skill content...")
 
-    generator = dspy.ChainOfThought(GenerateEvalCases)
-    result = generator(skill_content=skill_content[:6000], skill_name=skill_name)
+    client = _get_openai_client(api_key=api_key, api_base=api_base)
+
+    prompt = (
+        "Generate evaluation test cases for a Claude Agent Skill.\n\n"
+        "Create 3 realistic test prompts a user would actually say. "
+        "Cover different aspects of the skill. Make prompts specific and detailed "
+        "with context (file paths, names, scenarios), not generic requests.\n\n"
+        f"Skill name: {skill_name}\n"
+        f"Skill content:\n{skill_content[:6000]}\n\n"
+        "Return JSON in this format:\n"
+        '{"evals": [{"id": 1, "name": "short-name", '
+        '"prompt": "realistic user prompt", '
+        '"expected_output": "description of success"}]}'
+    )
+
+    response_text = _chat(client, model, prompt)
 
     try:
-        data = json.loads(result.test_cases)
+        data = json.loads(response_text)
         if "evals" not in data:
             data = {"evals": data if isinstance(data, list) else []}
         data["skill_name"] = skill_name
@@ -149,93 +204,22 @@ def auto_generate_evals(skill_content: str, skill_name: str, verbose: bool = Fal
 
 
 # ============================================================================
-# Phase 2: DSPy Module for Skill Optimization
-# ============================================================================
-
-class OptimizeSkillWithEvals(dspy.Signature):
-    """Optimize a Claude Agent Skill to be effective, concise, and satisfy all evaluation criteria.
-
-    Given the original skill content and evaluation test cases with assertions,
-    rewrite the skill so that:
-
-    1. HANDLE ALL TEST CASES: The optimized skill must contain the knowledge,
-       commands, workflows, and guidance needed for an agent to produce responses
-       satisfying every assertion in every test case.
-
-    2. BE CONCISE: Remove filler phrases ("make sure to", "ensure that",
-       "don't forget to"), verbose explanations of concepts the model already
-       knows (what YAML/JSON/PDF is), and redundant or unrelated content.
-
-    3. PRESERVE STRUCTURE: Keep frontmatter (--- name/description ---),
-       section headers (##), and essential code blocks (```bash, ```python).
-
-    4. CONSOLIDATE: Merge similar commands using placeholders (e.g., -n <namespace>).
-
-    The output must be a complete, valid SKILL.md file starting with --- frontmatter.
-    """
-    original_skill: str = dspy.InputField(desc="Original SKILL.md content to optimize")
-    eval_cases: str = dspy.InputField(
-        desc="Evaluation test cases with prompts and assertions the optimized skill must satisfy"
-    )
-    optimized_skill: str = dspy.OutputField(
-        desc="Complete optimized SKILL.md content that is concise and enables handling all test cases"
-    )
-
-
-class SkillOptimizerWithEvalsModule(dspy.Module):
-    """DSPy module that optimizes skills guided by eval assertions."""
-
-    def __init__(self):
-        super().__init__()
-        self.optimize = dspy.ChainOfThought(OptimizeSkillWithEvals)
-
-    def forward(self, original_skill: str, eval_cases: str) -> str:
-        result = self.optimize(
-            original_skill=original_skill,
-            eval_cases=eval_cases,
-        )
-        return result.optimized_skill
-
-
-# ============================================================================
 # LLM-as-Judge for Assertion Evaluation
 # ============================================================================
-
-class JudgeAssertions(dspy.Signature):
-    """Judge whether an optimized skill would guide an agent to satisfy assertions.
-
-    Evaluate whether the skill document contains sufficient information, commands,
-    and guidance for an AI agent to successfully complete the given task and
-    satisfy all assertions.
-
-    For each assertion:
-    - PASS: The skill clearly provides the knowledge, commands, or workflow
-      needed to produce output satisfying this assertion.
-    - FAIL: The skill lacks the necessary information, commands, or guidance.
-
-    Be strict: the skill must contain actionable content (specific commands,
-    steps, examples) that directly enables satisfying the assertion.
-    """
-    optimized_skill: str = dspy.InputField(desc="The optimized skill content being evaluated")
-    eval_prompt: str = dspy.InputField(desc="The user's task prompt")
-    assertions: str = dspy.InputField(desc="JSON array of assertions to evaluate")
-    verdicts: str = dspy.OutputField(
-        desc='JSON array of {"assertion": "...", "passed": true/false, "reason": "brief evidence"}'
-    )
-
 
 def judge_skill_against_assertions(
     optimized_skill: str,
     eval_cases: list[dict],
-    judge_module=None,
+    model: str = "openai/gpt-4o",
+    api_key: str = None,
+    api_base: str = None,
 ) -> tuple[float, list[dict]]:
     """Use LLM-as-judge to evaluate if the skill enables satisfying assertions.
 
     Returns:
         (score, detailed_results) where score is 0.0-1.0
     """
-    if judge_module is None:
-        judge_module = dspy.ChainOfThought(JudgeAssertions)
+    client = _get_openai_client(api_key=api_key, api_base=api_base)
 
     total_assertions = 0
     total_passed = 0
@@ -246,22 +230,37 @@ def judge_skill_against_assertions(
         if not assertions:
             continue
 
-        result = judge_module(
-            optimized_skill=optimized_skill,
-            eval_prompt=eval_case["prompt"],
-            assertions=json.dumps(assertions),
+        prompt = (
+            "Judge whether an optimized skill would guide an agent to satisfy assertions.\n\n"
+            "Evaluate whether the skill document contains sufficient information, commands, "
+            "and guidance for an AI agent to successfully complete the given task and "
+            "satisfy all assertions.\n\n"
+            "For each assertion:\n"
+            "- PASS: The skill clearly provides the knowledge, commands, or workflow "
+            "needed to produce output satisfying this assertion.\n"
+            "- FAIL: The skill lacks the necessary information, commands, or guidance.\n\n"
+            "Be strict: the skill must contain actionable content (specific commands, "
+            "steps, examples) that directly enables satisfying the assertion.\n\n"
+            f"Optimized skill:\n{optimized_skill}\n\n"
+            f"User task prompt: {eval_case['prompt']}\n\n"
+            f"Assertions to evaluate:\n{json.dumps(assertions)}\n\n"
+            'Return a JSON array of objects: '
+            '[{"assertion": "...", "passed": true/false, "reason": "brief evidence"}]'
         )
 
+        response_text = _chat(client, model, prompt, temperature=0.0)
+
         try:
-            verdicts = json.loads(result.verdicts)
-            if isinstance(verdicts, list):
+            verdicts = _parse_json_or_lines(response_text)
+            if isinstance(verdicts, list) and verdicts and isinstance(verdicts[0], dict):
                 passed = sum(1 for v in verdicts if v.get("passed", False))
                 total = len(verdicts)
             else:
                 passed = 0
                 total = len(assertions)
-        except (json.JSONDecodeError, TypeError):
-            text = str(result.verdicts).upper()
+                verdicts = []
+        except (TypeError, IndexError):
+            text = response_text.upper()
             passed = max(0, text.count("PASS") - text.count("NOT PASS"))
             total = len(assertions)
             verdicts = []
@@ -344,34 +343,54 @@ def static_analysis_score(optimized: str, original: str) -> float:
     return score
 
 
-def create_eval_metric(eval_cases: list[dict], judge_module=None):
-    """Create a metric function closure with eval cases and judge baked in.
+# ============================================================================
+# Evaluator for optimize_anything
+# ============================================================================
 
-    Returns a metric function compatible with DSPy GEPA:
-        metric(gold, pred, trace=None, ...) -> float
+def create_eval_evaluator(original_content: str, eval_cases: list[dict], model: str,
+                          api_key: str = None, api_base: str = None):
+    """Create an evaluator closure for optimize_anything.
 
     Scoring weights:
     - 40% Static analysis (filler, conciseness, structure, code blocks)
     - 60% Assertion satisfaction (LLM-as-judge)
     """
-    if judge_module is None:
-        judge_module = dspy.ChainOfThought(JudgeAssertions)
-
-    def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
-        optimized = pred.optimized_skill if hasattr(pred, 'optimized_skill') else str(pred)
-        original = gold.original_skill if hasattr(gold, 'original_skill') else ""
+    def evaluate(candidate: str) -> tuple[float, dict]:
+        feedback = {}
 
         # Part A: Static analysis (40%)
-        static = static_analysis_score(optimized, original)
+        static = static_analysis_score(candidate, original_content)
+        feedback["static_score"] = f"{static:.3f}"
 
         # Part B: LLM-as-judge assertion evaluation (60%)
-        assertion_score, _ = judge_skill_against_assertions(
-            optimized, eval_cases, judge_module
+        assertion_score, detailed = judge_skill_against_assertions(
+            candidate, eval_cases, model=model,
+            api_key=api_key, api_base=api_base,
         )
+        feedback["assertion_pass_rate"] = f"{assertion_score:.3f}"
 
-        return 0.40 * static + 0.60 * assertion_score
+        combined = 0.40 * static + 0.60 * assertion_score
+        feedback["combined_score"] = f"{combined:.3f}"
 
-    return metric
+        # Per-eval feedback for GEPA reflection
+        for r in detailed:
+            status = (
+                "PASS" if r["pass_rate"] == 1.0
+                else f"PARTIAL ({r['passed']}/{r['total']})"
+            )
+            feedback[f"eval_{r['eval_id']}_{r['eval_name']}"] = status
+            if r.get("verdicts"):
+                failures = [v for v in r["verdicts"] if isinstance(v, dict) and not v.get("passed")]
+                if failures:
+                    feedback[f"eval_{r['eval_id']}_failures"] = json.dumps(failures[:3])
+
+        oa.log(f"Static: {static:.3f} | Assertions: {assertion_score:.3f} | Combined: {combined:.3f}")
+        for r in detailed:
+            oa.log(f"  Eval [{r['eval_id']}] {r['eval_name']}: {r['passed']}/{r['total']}")
+
+        return combined, feedback
+
+    return evaluate
 
 
 # ============================================================================
@@ -379,7 +398,7 @@ def create_eval_metric(eval_cases: list[dict], judge_module=None):
 # ============================================================================
 
 def format_eval_cases(eval_cases: list[dict]) -> str:
-    """Format eval cases as readable text for the DSPy module input."""
+    """Format eval cases as readable text for GEPA background context."""
     lines = []
     for ec in eval_cases:
         lines.append(f"## Test Case {ec.get('id', '?')}: {ec.get('name', 'unnamed')}")
@@ -407,6 +426,8 @@ def optimize_skill_with_evals(
     dry_run: bool = False,
     generate_evals: bool = False,
     verbose: bool = True,
+    api_key: str = None,
+    api_base: str = None,
 ) -> dict:
     """
     Three-phase skill optimization pipeline.
@@ -419,8 +440,8 @@ def optimize_skill_with_evals(
         skill_path: Path to the skill directory containing SKILL.md
         evals_path: Path to evals.json with test cases
         output_path: Directory to save optimized skill and benchmark
-        model: LLM model for DSPy (default: openai/gpt-4o)
-        max_evals: Maximum GEPA evaluations
+        model: LLM model in litellm format (default: openai/gpt-4o)
+        max_evals: Maximum GEPA metric calls
         dry_run: If True, only run Phase 1 (load/generate evals)
         generate_evals: If True, auto-generate eval cases when none provided
         verbose: Print progress information
@@ -451,18 +472,6 @@ def optimize_skill_with_evals(
         suggestions = sum(1 for i in report.issues if i.severity == 'suggestion')
         print(f"\nAnalysis: {report.score}/100 ({errors} errors, {warnings} warnings, {suggestions} suggestions)")
 
-    # ---- Configure DSPy ----
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable not set")
-    api_base = os.getenv("OPENAI_API_BASE", None)
-
-    lm = dspy.LM(model, api_key=api_key, api_base=api_base)
-    dspy.configure(lm=lm)
-
-    if verbose:
-        print(f"Configured DSPy with: {lm.model}")
-
     # ==================================================================
     # Phase 1: Load / Generate Evals & Assertions
     # ==================================================================
@@ -478,7 +487,8 @@ def optimize_skill_with_evals(
             print(f"  Skill: {evals_data.get('skill_name', 'unknown')}")
             print(f"  Eval cases: {len(evals_data.get('evals', []))}")
     elif generate_evals:
-        evals_data = auto_generate_evals(skill_content, skill.name, verbose=verbose)
+        evals_data = auto_generate_evals(skill_content, skill.name, model=model, verbose=verbose,
+                                          api_key=api_key, api_base=api_base)
         if verbose:
             print(f"  Generated {len(evals_data.get('evals', []))} eval case(s)")
     else:
@@ -493,7 +503,10 @@ def optimize_skill_with_evals(
     if cases_without:
         if verbose:
             print(f"\nGenerating assertions for {len(cases_without)} eval case(s)...")
-        evals_data = generate_assertions_for_evals(evals_data, skill_content, verbose=verbose)
+        evals_data = generate_assertions_for_evals(
+            evals_data, skill_content, model=model, verbose=verbose,
+            api_key=api_key, api_base=api_base,
+        )
         eval_cases = evals_data.get("evals", [])
 
     if verbose:
@@ -534,74 +547,73 @@ def optimize_skill_with_evals(
         print("PHASE 2: GEPA optimization with eval-based metric")
         print("=" * 60)
 
-    # Format eval cases as text for the module
+    issues_str = "\n".join([
+        f"- [{issue.severity}] {issue.category}: {issue.message}"
+        for issue in report.issues[:20]
+    ])
+
     eval_cases_str = format_eval_cases(eval_cases)
 
-    # Create training data
-    trainset = [
-        dspy.Example(
-            original_skill=skill_content,
-            eval_cases=eval_cases_str,
-        ).with_inputs("original_skill", "eval_cases")
-    ]
-
-    # Create judge module and metric
-    judge_module = dspy.ChainOfThought(JudgeAssertions)
-    metric_fn = create_eval_metric(eval_cases, judge_module)
-
-    # Initialize optimizer module
-    optimizer_module = SkillOptimizerWithEvalsModule()
-
-    # Create reflection LM
-    reflection_lm = dspy.LM(
-        model,
-        api_key=api_key,
-        api_base=api_base,
-        temperature=1.0,
-        max_tokens=4096,
+    objective = (
+        "Optimize this Claude Agent Skill (SKILL.md) to be effective, concise, and "
+        "satisfy all evaluation criteria. The skill must contain the knowledge, commands, "
+        "and workflows needed for an agent to handle all test cases and pass all assertions. "
+        "The output must be a complete, valid SKILL.md file starting with --- frontmatter."
     )
 
-    # Initialize GEPA
-    gepa = GEPA(
-        metric=metric_fn,
-        reflection_lm=reflection_lm,
-        max_full_evals=max_evals,
-        num_threads=1,
-        reflection_minibatch_size=min(3, len(trainset)),
-        skip_perfect_score=True,
+    background = (
+        f"Issues found by the skill analyzer:\n{issues_str}\n\n"
+        f"Evaluation test cases the optimized skill must support:\n{eval_cases_str}\n\n"
+        "Optimization guidelines:\n"
+        "- Remove filler phrases: 'make sure to', 'ensure that', 'don't forget to'\n"
+        "- Don't explain concepts Claude already knows (YAML, JSON, APIs, etc.)\n"
+        "- Preserve frontmatter (--- name/description ---), section headers (##), "
+        "and essential code blocks\n"
+        "- Consolidate similar commands using placeholders (e.g., -n <namespace>)\n"
+        "- Target 30-70% size reduction"
     )
+
+    evaluator = create_eval_evaluator(skill_content, eval_cases, model=model,
+                                      api_key=api_key, api_base=api_base)
 
     total_assertions = sum(len(e.get("expectations", [])) for e in eval_cases)
     if verbose:
-        print(f"Running GEPA with {model}...")
-        print(f"  Max evaluations: {max_evals}")
-        print(f"  Training examples: {len(trainset)}")
+        print(f"Running GEPA optimize_anything with {model}...")
+        print(f"  Max metric calls: {max_evals}")
         print(f"  Eval cases: {len(eval_cases)}")
         print(f"  Total assertions: {total_assertions}")
         print(f"  Metric: 40% static + 60% assertion (LLM-as-judge)")
         print()
 
-    # Compile / optimize the module
-    optimized_module = gepa.compile(
-        student=optimizer_module,
-        trainset=trainset,
+    if api_key:
+        os.environ.setdefault("OPENAI_API_KEY", api_key)
+    if api_base:
+        os.environ.setdefault("OPENAI_API_BASE", api_base)
+
+    result = optimize_anything(
+        seed_candidate=skill_content,
+        evaluator=evaluator,
+        objective=objective,
+        background=background,
+        config=GEPAConfig(
+            engine=EngineConfig(
+                max_metric_calls=max_evals,
+                display_progress_bar=verbose,
+            ),
+            reflection=ReflectionConfig(
+                reflection_lm=model,
+                skip_perfect_score=True,
+                perfect_score=1.0,
+            ),
+        ),
     )
+
+    optimized_content = result.best_candidate
+    if isinstance(optimized_content, dict):
+        optimized_content = list(optimized_content.values())[0]
 
     if verbose:
         print("\nGEPA optimization complete")
-
-    # Apply optimized module
-    if verbose:
-        print("Applying optimized module to skill...")
-
-    result = optimized_module(
-        original_skill=skill_content,
-        eval_cases=eval_cases_str,
-    )
-
-    optimized_content = (
-        result.optimized_skill if hasattr(result, 'optimized_skill') else str(result)
-    )
 
     # ==================================================================
     # Phase 3: Validate & Output
@@ -613,7 +625,8 @@ def optimize_skill_with_evals(
 
     # Final assertion evaluation
     final_assertion_score, detailed_results = judge_skill_against_assertions(
-        optimized_content, eval_cases, judge_module
+        optimized_content, eval_cases, model=model,
+        api_key=api_key, api_base=api_base,
     )
 
     # Static analysis
@@ -647,16 +660,14 @@ def optimize_skill_with_evals(
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # Save optimized SKILL.md
         (output_path / "SKILL.md").write_text(optimized_content)
 
-        # Save benchmark results
         benchmark = {
             "metadata": {
                 "skill_name": skill.name,
                 "model": model,
-                "optimizer": "GEPA",
-                "max_evals": max_evals,
+                "optimizer": "GEPA optimize_anything",
+                "max_metric_calls": max_evals,
                 "metric_weights": {"static": 0.40, "assertions": 0.60},
             },
             "scores": {
@@ -723,10 +734,12 @@ Examples:
     p.add_argument("skill_path", type=Path, help="Path to the skill directory")
     p.add_argument("-o", "--output", type=Path, help="Output directory for optimized skill")
     p.add_argument("--evals", type=Path, help="Path to evals.json with test cases")
-    p.add_argument("--model", default="openai/gpt-4o", help="LLM model (default: openai/gpt-4o)")
-    p.add_argument("--max-evals", type=int, default=10, help="Max GEPA evaluations (default: 10)")
+    p.add_argument("--model", default="openai/gpt-4o", help="LLM model in litellm format (default: openai/gpt-4o)")
+    p.add_argument("--max-evals", type=int, default=10, help="Max GEPA metric calls (default: 10)")
     p.add_argument("--generate-evals", action="store_true", help="Auto-generate eval cases if none provided")
     p.add_argument("--dry-run", action="store_true", help="Phase 1 only: load/generate evals, skip optimization")
+    p.add_argument("--api-key", default=None, help="API key (default: OPENAI_API_KEY or API_KEY env var)")
+    p.add_argument("--api-base", default=None, help="API base URL for OpenAI-compatible endpoints (e.g. http://localhost:11434/v1 for Ollama)")
     p.add_argument("-q", "--quiet", action="store_true", help="Suppress verbose output")
 
     args = p.parse_args()
@@ -763,6 +776,8 @@ Examples:
             dry_run=args.dry_run,
             generate_evals=args.generate_evals,
             verbose=not args.quiet,
+            api_key=args.api_key,
+            api_base=args.api_base,
         )
 
         if not args.quiet:

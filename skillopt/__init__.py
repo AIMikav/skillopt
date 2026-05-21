@@ -1,4 +1,4 @@
-"""SkillOpt - Skill Optimizer using DSPy and best practices analysis."""
+"""SkillOpt - Skill Optimizer using GEPA and best practices analysis."""
 
 __version__ = "0.3.0"
 

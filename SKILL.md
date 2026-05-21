@@ -5,11 +5,11 @@ description: Use when the user wants to analyze, optimize, or benchmark a Claude
 
 # Skill Optimizer
 
-Optimize Claude Agent Skills using DSPy's GEPA (Greedy Evolutionary Prompt Adaptation) algorithm. This skill wraps the SkillOpt CLI to analyze, optimize, and benchmark skills.
+Optimize Claude Agent Skills using GEPA's `optimize_anything` API. This skill wraps the SkillOpt CLI to analyze, optimize, and benchmark skills.
 
 ## Prerequisites
 
-- `OPENAI_API_KEY` must be set in the environment or `.env`
+- An API key for any OpenAI-compatible provider (OpenAI, Gemini, Ollama, etc.)
 - Dependencies installed via `uv sync`
 - The skill to optimize must be a directory containing a `SKILL.md`
 
@@ -22,9 +22,9 @@ When the user asks to optimize a skill, follow these steps:
 - [ ] Confirm the path to the skill directory (must contain a `SKILL.md`)
 - [ ] Check if an `evals.json` file exists alongside or within the skill directory
 - [ ] Ask the user which optimization mode they want if not clear:
-  - **Analyze only** — score against best practices, no changes
-  - **Static optimization** — optimize using filler/conciseness/structure metric
-  - **Eval-based optimization** (recommended) — optimize using evals + LLM-as-judge assertions
+  - **Analyze only** -- score against best practices, no changes
+  - **Static optimization** -- evaluator scores filler/conciseness/structure/code-blocks
+  - **Eval-based optimization** (recommended) -- 40% static + 60% LLM-as-judge assertions
 
 ### Step 2: Analyze the skill
 
@@ -117,10 +117,16 @@ Bad assertions are subjective:
 
 ```bash
 python main.py analyze <skill_directory>
-python main.py optimize <skill_directory> [-o <output>] [--model <model>] [--max-evals <n>]
-python main.py optimize-evals <skill_directory> [--evals <path>] [--generate-evals] [--dry-run] [--model <model>] [--max-evals <n>]
+python main.py optimize <skill_directory> [-o <output>] [--model <model>] [--api-key <key>] [--api-base <url>] [--max-evals <n>]
+python main.py optimize-evals <skill_directory> [--evals <path>] [--generate-evals] [--dry-run] [--model <model>] [--api-key <key>] [--api-base <url>] [--max-evals <n>]
 python main.py benchmark <skill_directory> [--num-runs <n>]
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--model <provider/model>` | LLM model in litellm format (default: `openai/gpt-4o`) |
+| `--api-key <key>` | API key (fallback: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `API_KEY` env vars) |
+| `--api-base <url>` | Base URL for OpenAI-compatible endpoints (e.g. `http://localhost:11434/v1` for Ollama) |
 
 Run any subcommand with `--help` for full details.
 
@@ -128,7 +134,7 @@ Run any subcommand with `--help` for full details.
 
 ### Static metric
 
-Scores candidates on: filler phrase removal, conciseness (target 30-70% reduction), code-block preservation, and structural integrity (frontmatter, sections).
+Scores candidates on: filler phrase removal, conciseness (target 40-70% reduction), code-block preservation, and structural integrity (frontmatter, sections).
 
 ### Eval-based metric
 

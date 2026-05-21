@@ -1,11 +1,17 @@
 # SkillOpt - Skill Optimizer
 
-SkillOpt optimizes Claude Agent Skills using DSPy's GEPA optimizer and best practices analysis.
+SkillOpt optimizes Claude Agent Skills using GEPA's `optimize_anything` API and best practices analysis.
 
 ## Quick Start
 
 ```bash
-export OPENAI_API_KEY=your-api-key
+# With OpenAI
+uv run python main.py optimize-evals <skill_directory> --generate-evals \
+    --api-key $OPENAI_API_KEY --model openai/gpt-4o
+
+# With local Ollama
+uv run python main.py optimize-evals <skill_directory> --generate-evals \
+    --model ollama/gemma3:4b --api-key ollama --api-base http://localhost:11434/v1
 
 # Analyze a skill
 uv run python main.py analyze <skill_directory>
@@ -13,15 +19,11 @@ uv run python main.py analyze <skill_directory>
 # Static-only optimization
 uv run python main.py optimize <skill_directory> -o <output_directory>
 
-# Eval-based optimization (recommended)
-uv run python main.py optimize-evals <skill_directory> --evals <evals.json>
-uv run python main.py optimize-evals <skill_directory> --generate-evals
-
 # Variance benchmark
 uv run python main.py benchmark <skill_directory>
 ```
 
-The Jupyter notebook in `notebooks/` provides an interactive walkthrough.
+API key is resolved from `--api-key` flag, or env vars: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `API_KEY` (also loaded from `.env`).
 
 ## Library usage
 
@@ -49,7 +51,9 @@ print(f"Issues: {len(report.issues)}")
 
 ## Optimization modes
 
-- **Static-only** (`main.py optimize`) — composite metric: filler removal, conciseness, code-block preservation, structure
-- **Eval-based** (`main.py optimize-evals`) — 40% static + 60% LLM-as-judge assertion pass rate. Evals can be hand-written or auto-generated.
+- **Static-only** (`main.py optimize`) -- evaluator scores filler removal, conciseness, code-block preservation, structure
+- **Eval-based** (`main.py optimize-evals`) -- 40% static + 60% LLM-as-judge assertion pass rate. Evals can be hand-written or auto-generated.
+
+Both modes use `gepa.optimize_anything` with the skill content as the seed candidate. GEPA evolves the text via reflection-driven search, guided by evaluator feedback.
 
 Run any subcommand with `--help` for full CLI options.

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-SkillOpt — Optimize Claude Agent Skills using DSPy's GEPA optimizer.
+SkillOpt — Optimize Claude Agent Skills using GEPA's optimize_anything API.
 
 Subcommands:
     analyze         Analyze a skill against best practices (no optimization)
     optimize        Static-only GEPA optimization
-    optimize-evals  Eval-based GEPA optimization (recommended)
+    optimize-evals  Eval-based GEPA optimization (static + LLM-as-judge assertions)
     benchmark       Run variance benchmark on the analyzer
 
 Usage:

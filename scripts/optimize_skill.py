@@ -8,25 +8,37 @@ Usage:
     python optimize_skill.py <skill_path> [options]
 
 Examples:
-    python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill
-    python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill -o optimized_skill
-    python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill --dry-run
+    python optimize_skill.py <skill_directory>
+    python optimize_skill.py <skill_directory> -o <output_directory>
+    python optimize_skill.py <skill_directory> --dry-run
 """
 
 import argparse
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import gepa.optimize_anything as oa
 from gepa.optimize_anything import optimize_anything, GEPAConfig, EngineConfig, ReflectionConfig
 from dotenv import load_dotenv
 
-from skillopt import SkillParser, SkillAnalyzer
+from skillopt import SkillParser, SkillAnalyzer, TrajectoryLogger
 
 
 load_dotenv()
+
+OUTPUT_BASE = Path("output")
+
+
+def make_run_dir(skill_name: str) -> Path:
+    """Return output/skill-name-YYYYMMDD-HHMMSS and create it."""
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "-", skill_name).strip("-")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = OUTPUT_BASE / f"{slug}-{stamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 # ============================================================================
@@ -259,6 +271,14 @@ def optimize_skill(
 
     evaluator = create_skill_evaluator(skill_content)
 
+    # Set up trajectory logger
+    trajectory_logger = None
+    if output_path:
+        trajectory_logger = TrajectoryLogger(Path(output_path) / "trajectory")
+        evaluator = trajectory_logger.wrap(evaluator)
+        if verbose:
+            print(f"  Trajectory logging: {trajectory_logger.trajectory_dir}")
+
     if verbose:
         print(f"\nRunning GEPA optimize_anything (max_metric_calls={max_evals})...")
         print("=" * 50)
@@ -289,6 +309,14 @@ def optimize_skill(
     optimized_content = result.best_candidate
     if isinstance(optimized_content, dict):
         optimized_content = list(optimized_content.values())[0]
+
+    if trajectory_logger is not None:
+        summary_path = trajectory_logger.save_summary(
+            result,
+            metadata={"skill_name": skill.name, "model": model, "max_metric_calls": max_evals},
+        )
+        if verbose:
+            print(f"Trajectory summary saved: {summary_path}")
 
     if verbose:
         print("GEPA optimization complete")
@@ -346,10 +374,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill
-  python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill -o optimized_skill
-  python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill --dry-run
-  python optimize_skill.py examples/Bad_Kubernetes_Helper_Skill --model openai/gpt-4o-mini
+  python optimize_skill.py <skill_directory>
+  python optimize_skill.py <skill_directory> -o <output_directory>
+  python optimize_skill.py <skill_directory> --dry-run
+  python optimize_skill.py <skill_directory> --model openai/gpt-4o-mini
         """
     )
 
@@ -414,7 +442,7 @@ Examples:
     args = parser.parse_args()
 
     if args.output is None and not args.dry_run:
-        args.output = Path(f"{args.skill_path}_GEPA_Optimized")
+        args.output = make_run_dir(args.skill_path.name)
 
     try:
         result = optimize_skill(

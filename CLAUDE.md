@@ -1,59 +1,27 @@
-# SkillOpt - Skill Optimizer
+# SkillOpt
 
-SkillOpt optimizes Claude Agent Skills using GEPA's `optimize_anything` API and best practices analysis.
+SkillOpt optimizes or creates Claude Agent Skills using GEPA's `optimize_anything` API. It uses a hybrid evaluator (40% static best-practice rules + 60% LLM-as-judge assertion pass rate) to score each candidate, and GEPA's reflection-driven search evolves the skill toward the optimum.
 
-## Quick Start
+## Subcommands
 
-```bash
-# With OpenAI
-uv run python main.py optimize-evals <skill_directory> --generate-evals \
-    --api-key $OPENAI_API_KEY --model openai/gpt-4o
+- `analyze` — score a skill against best practices, no changes made
+- `optimize` — static-only GEPA optimization (no LLM judge or evals needed)
+- `optimize-evals` — eval-based GEPA optimization; evals can be hand-written, auto-generated, or loaded from TAU-bench / SWE-bench / SearchQA; use `--from-scratch` to create a new skill instead of optimizing an existing one
+- `convert` — convert any HuggingFace dataset to SkillOpt eval format via field mapping flags, output fed into `optimize-evals`
 
-# With local Ollama
-uv run python main.py optimize-evals <skill_directory> --generate-evals \
-    --model ollama/gemma3:4b --api-key ollama --api-base http://localhost:11434/v1
+## Key flags
 
-# Analyze a skill
-uv run python main.py analyze <skill_directory>
+- `--model`, `--api-key`, `--api-base` — LLM provider config (OpenAI, Ollama, Gemini, or any OpenAI-compatible endpoint)
+- `--benchmark` — load evals from `tau-bench`, `swe-bench`, or `searchqa`
+- `--from-scratch` — skip existing SKILL.md, have GEPA generate the first candidate from benchmark context
+- `--dry-run` — Phase 1 only: load/generate evals without optimizing
+- `--max-evals` — number of GEPA iterations (default: 10)
+- `-o` — override output directory (default: `output/<skill-name>-<timestamp>/`)
 
-# Static-only optimization
-uv run python main.py optimize <skill_directory> -o <output_directory>
+## Output
 
-# Variance benchmark
-uv run python main.py benchmark <skill_directory>
-```
+All artifacts go to `output/<skill-name>-<timestamp>/`: optimized `SKILL.md`, `benchmark.json` (scores + assertion verdicts), `evals_with_assertions.json`, and a `trajectory/` directory with per-iteration candidate files and a live `trajectory.jsonl` log.
 
-API key is resolved from `--api-key` flag, or env vars: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `API_KEY` (also loaded from `.env`).
+## API key resolution
 
-## Library usage
-
-```python
-from skillopt import SkillParser, SkillAnalyzer
-
-parser = SkillParser()
-skill = parser.parse_directory("<skill_directory>")
-
-analyzer = SkillAnalyzer()
-report = analyzer.analyze(skill)
-print(f"Score: {report.score}/100")
-print(f"Issues: {len(report.issues)}")
-```
-
-## Best Practices Checks
-
-| Category | Checks |
-|----------|--------|
-| **Structure** | SKILL.md < 500 lines, one-level references, TOC for long files |
-| **Conciseness** | Remove filler phrases, simplify verbose explanations |
-| **Frontmatter** | Valid name (lowercase, hyphens), description with "Use when..." |
-| **Workflows** | Clear steps with checklists, validation feedback loops |
-| **Terminology** | Consistent terms throughout skill |
-
-## Optimization modes
-
-- **Static-only** (`main.py optimize`) -- evaluator scores filler removal, conciseness, code-block preservation, structure
-- **Eval-based** (`main.py optimize-evals`) -- 40% static + 60% LLM-as-judge assertion pass rate. Evals can be hand-written or auto-generated.
-
-Both modes use `gepa.optimize_anything` with the skill content as the seed candidate. GEPA evolves the text via reflection-driven search, guided by evaluator feedback.
-
-Run any subcommand with `--help` for full CLI options.
+Checks `--api-key` flag first, then env vars `OPENAI_API_KEY` → `GEMINI_API_KEY` → `API_KEY` (loaded from `.env`).

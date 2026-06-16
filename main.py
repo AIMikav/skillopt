@@ -6,14 +6,14 @@ Subcommands:
     analyze         Analyze a skill against best practices (no optimization)
     optimize        Static-only GEPA optimization
     optimize-evals  Eval-based GEPA optimization (static + LLM-as-judge assertions)
-    benchmark       Run variance benchmark on the analyzer
+    convert         Convert any HuggingFace dataset to SkillOpt eval format
 
 Usage:
     python main.py analyze <skill_path>
     python main.py optimize <skill_path> [-o <output>]
     python main.py optimize-evals <skill_path> --evals <evals.json>
     python main.py optimize-evals <skill_path> --generate-evals
-    python main.py benchmark <skill_path> [--num-runs 10]
+    python main.py convert <dataset_id> --prompt-field <field> [-o evals.json]
 """
 
 import sys
@@ -46,25 +46,18 @@ def cmd_optimize_evals(argv):
     raise SystemExit(optimize_evals_main())
 
 
-def cmd_benchmark(argv):
-    """Run variance benchmark."""
-    from scripts.run_variance_benchmark import compare_skills_variance
-    import argparse
-
-    p = argparse.ArgumentParser(description="Run variance benchmark on skill analyzer")
-    p.add_argument("skill_path", type=Path, nargs="+", help="One or more skill directories to benchmark")
-    p.add_argument("--num-runs", type=int, default=10, help="Number of runs per skill (default: 10)")
-    args = p.parse_args(argv)
-
-    skills = {path.name: path for path in args.skill_path}
-    compare_skills_variance(skills, num_runs=args.num_runs)
+def cmd_convert(argv):
+    """Convert a HuggingFace dataset to SkillOpt eval format."""
+    from scripts.convert_benchmark import main as convert_main
+    sys.argv = ["convert_benchmark", *argv]
+    raise SystemExit(convert_main())
 
 
 COMMANDS = {
     "analyze": cmd_analyze,
     "optimize": cmd_optimize,
     "optimize-evals": cmd_optimize_evals,
-    "benchmark": cmd_benchmark,
+    "convert": cmd_convert,
 }
 
 

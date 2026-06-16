@@ -1,101 +1,102 @@
 ---
 name: skill-optimizer
-description: Use when the user wants to analyze, optimize, or benchmark a Claude Agent Skill using GEPA. Handles best practices analysis, static or eval-based optimization, eval/assertion generation, and before/after comparison.
-argument-hint: <skill-directory> [--evals <evals.json>] [--generate-evals] [--mode analyze|optimize|optimize-evals]
+description: Use when the user wants to analyze, optimize, or create a Claude Agent Skill using GEPA. Handles best practices analysis, static or eval-based optimization, benchmark-driven optimization (TAU-bench, SWE-bench, SearchQA), creating skills from scratch, converting custom HuggingFace datasets to eval format, and before/after comparison.
+argument-hint: <skill-directory> [--benchmark <name>] [--from-scratch] [--generate-evals] [--evals <evals.json>] [--mode analyze|optimize|optimize-evals|convert]
 allowed-tools: Bash Read Grep Glob
 ---
 
 # Skill Optimizer
 
-Optimize the Claude Agent Skill at `$ARGUMENTS` using GEPA's optimize_anything API.
+Optimize or create the Claude Agent Skill using GEPA's optimize_anything API.
 
 ## Step 1: Parse arguments
 
 Parse `$ARGUMENTS` for:
-- **skill directory** (required) -- path to directory containing a SKILL.md
-- **--evals <path>** (optional) -- path to an evals.json file
-- **--generate-evals** (optional) -- auto-generate evals from skill content
-- **--mode** (optional) -- one of `analyze`, `optimize`, `optimize-evals` (default: ask)
-- **-o <path>** (optional) -- output directory
+- **skill directory** (required for analyze/optimize) — path to directory containing a SKILL.md
+- **--mode** (optional) — one of `analyze`, `optimize`, `optimize-evals`, `convert` (default: ask)
+- **--evals <path>** (optional) — path to a hand-written evals.json
+- **--generate-evals** (optional) — auto-generate evals from skill content
+- **--benchmark <name>** (optional) — `tau-bench`, `swe-bench`, or `searchqa`
+- **--benchmark-split <split>** (optional) — e.g. `airline`, `retail`, `validation`
+- **--benchmark-variant <variant>** (optional) — e.g. `swe-bench-verified`
+- **--from-scratch** (optional) — create a new skill instead of optimizing an existing one
+- **-o <path>** (optional) — output directory
 
-If only a skill directory is provided, ask the user which mode to run:
-1. **Analyze** -- score against best practices, no optimization
-2. **Optimize (static)** -- evaluator scores filler/conciseness/structure/code-blocks
-3. **Optimize with evals** (recommended) -- 40% static + 60% LLM-as-judge assertions
+If mode is not specified, ask the user:
+1. **Analyze** — score against best practices, no changes
+2. **Optimize (static)** — rule-based scoring only, no evals needed
+3. **Optimize with evals** (recommended) — 40% static + 60% LLM-as-judge assertions
+4. **Create from scratch** — generate a brand new skill grounded in benchmark tasks
+5. **Convert dataset** — convert a HuggingFace dataset to eval format
 
 ## Step 2: Verify prerequisites
 
-- [ ] Confirm the skill directory exists and contains a SKILL.md
-- [ ] Confirm an API key is available (via `--api-key`, or env vars: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `API_KEY`)
-- [ ] If evals path was provided, confirm the file exists
-- [ ] Ask the user which LLM provider/model to use if not specified
+- [ ] API key available via `--api-key` or env vars (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `API_KEY`)
+- [ ] For `--benchmark swe-bench` or `searchqa`: `datasets` package installed (`uv pip install datasets`)
+- [ ] For optimize/analyze: skill directory exists with a SKILL.md (not required for `--from-scratch`)
+- [ ] For `--evals`: file exists at the provided path
 
-```bash
-test -f "$SKILL_DIR/SKILL.md" && echo "SKILL.md found" || echo "ERROR: No SKILL.md"
-```
+## Step 3: Run the command
 
-## Step 3: Analyze
-
-Always run analysis first regardless of mode:
-
+**Analyze:**
 ```bash
 python main.py analyze <skill_directory>
 ```
 
-Report to the user:
-- Score out of 100
-- Number of errors, warnings, suggestions
-- Top issues found
-
-If mode is `analyze`, stop here.
-
-## Step 4: Optimize
-
-Run the appropriate optimization:
-
-All commands accept `--model <provider/model>`, `--api-key <key>`, and `--api-base <url>`.
-
-**Static-only:**
+**Static optimization:**
 ```bash
-python main.py optimize <skill_directory> -o <output_directory> --model ollama/gemma3:4b --api-key ollama --api-base http://localhost:11434/v1
+python main.py optimize <skill_directory> --model <provider/model> --api-key <key>
 ```
 
-**Eval-based with provided evals:**
+**Eval-based optimization:**
 ```bash
-python main.py optimize-evals <skill_directory> --evals <evals_json_path> -o <output_directory> --model <provider/model> --api-key <key>
+# Hand-written evals
+python main.py optimize-evals <skill_directory> --evals <evals.json>
+
+# Auto-generated evals
+python main.py optimize-evals <skill_directory> --generate-evals
+
+# Benchmark-driven
+python main.py optimize-evals <skill_directory> --benchmark tau-bench --benchmark-split airline
+python main.py optimize-evals <skill_directory> --benchmark swe-bench --benchmark-variant swe-bench-verified
+python main.py optimize-evals <skill_directory> --benchmark searchqa
 ```
 
-**Eval-based with auto-generated evals:**
+**Create from scratch:**
 ```bash
-python main.py optimize-evals <skill_directory> --generate-evals -o <output_directory> --model <provider/model> --api-key <key>
+python main.py optimize-evals <new_directory> --from-scratch --benchmark tau-bench --benchmark-split airline
+python main.py optimize-evals <new_directory> --from-scratch --benchmark searchqa
 ```
 
-If no output directory was specified, the CLI defaults to `<skill_directory>_GEPA_Optimized` or `<skill_directory>_GEPA_Eval_Optimized`.
+**Convert a HuggingFace dataset to eval format:**
+```bash
+python main.py convert <dataset_id> \
+    --prompt-field <field> \
+    [--context-field <field>] \
+    [--answer-field <field>] \
+    [--split <split>] [--n <n>] [--config <config>] \
+    -o evals.json
+```
+Then feed the output into `optimize-evals --evals evals.json`.
 
-## Step 5: Review results
+All commands accept: `--model <provider/model>`, `--api-key <key>`, `--api-base <url>`, `--max-evals <n>`
 
-After optimization:
+## Step 4: Review results
 
-- [ ] Read the optimized SKILL.md from the output directory
-- [ ] Read benchmark.json for scores and assertion verdicts (eval-based only)
-- [ ] Present a before/after comparison:
-  - Character count and reduction percentage
-  - Code blocks preserved
-  - Filler phrases removed
-  - Static score, assertion pass rate, combined score (eval-based)
-  - Per-eval assertion results with PASS/FAIL (eval-based)
+Output is written to `output/<skill-name>-<timestamp>/`:
 
-## Step 6: Iterate if needed
+- [ ] Read `SKILL.md` — the optimized or generated skill
+- [ ] Read `benchmark.json` — static score, assertion pass rate, combined score
+- [ ] Read `trajectory/trajectory.jsonl` — per-iteration candidate scores
+- [ ] Present a before/after summary: size change, code blocks preserved, scores
 
-If the user wants to improve further:
+## Step 5: Iterate if needed
 
 - Increase `--max-evals` for more GEPA iterations
-- Provide hand-written evals for tighter control
-- Try a different `--model` (e.g. `ollama/gemma3:4b` for local, `openai/gpt-4o-mini` for fast cloud)
+- Provide hand-written evals for tighter control over what the skill must handle
+- Try a different `--model` or `--benchmark-split` for more diverse task coverage
 
 ## Evals format
-
-If the user wants to write custom evals, help them create a JSON file:
 
 ```json
 {
@@ -107,11 +108,11 @@ If the user wants to write custom evals, help them create a JSON file:
       "prompt": "A realistic user prompt exercising the skill",
       "expected_output": "What a good response looks like",
       "expectations": [
-        "Specific, verifiable assertion about the response"
+        "Specific, verifiable assertion — e.g. 'includes the kubectl logs command'"
       ]
     }
   ]
 }
 ```
 
-The `expectations` array is optional -- if omitted, assertions are auto-generated (3-6 per case). Assertions must be objective ("includes the kubectl logs command"), not subjective ("is well-formatted").
+`expectations` is optional — omit to auto-generate 4–6 assertions per case.

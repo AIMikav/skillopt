@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "SkillOpt - Optimize Claude Agent Skills using GEPA and best practices"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 authors = [
     { name = "SkillOpt Team" }
 ]
@@ -21,6 +21,9 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "ruff>=0.1",
+]
+benchmarks = [
+    "datasets>=2.0",
 ]
 
 [build-system]

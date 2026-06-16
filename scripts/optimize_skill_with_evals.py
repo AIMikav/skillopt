@@ -16,10 +16,10 @@ Usage:
     python optimize_skill_with_evals.py <skill_path> --evals <evals.json> --dry-run
 
 Examples:
-    python optimize_skill_with_evals.py examples/example_1/Bad_Kubernetes_Helper_Skill \\
-        --evals examples/example_1/kubernetes-skill-workspace/evals.json
-
-    python optimize_skill_with_evals.py my-skill/ --generate-evals -o my-skill-optimized/
+    python optimize_skill_with_evals.py <skill_directory> --evals <evals.json>
+    python optimize_skill_with_evals.py <skill_directory> --generate-evals
+    python optimize_skill_with_evals.py <skill_directory> --benchmark tau-bench --benchmark-split airline
+    python optimize_skill_with_evals.py <new_directory> --from-scratch --benchmark searchqa
 """
 
 import argparse
@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import gepa.optimize_anything as oa
@@ -34,9 +35,20 @@ from gepa.optimize_anything import optimize_anything, GEPAConfig, EngineConfig, 
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from skillopt import SkillParser, SkillAnalyzer
+from skillopt import SkillParser, SkillAnalyzer, TrajectoryLogger, load_benchmark
 
 load_dotenv()
+
+OUTPUT_BASE = Path("output")
+
+
+def make_run_dir(skill_name: str) -> Path:
+    """Return output/skill-name-YYYYMMDD-HHMMSS and create it."""
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "-", skill_name).strip("-")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = OUTPUT_BASE / f"{slug}-{stamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 # ============================================================================
@@ -286,6 +298,8 @@ def judge_skill_against_assertions(
 
 def count_code_blocks(content: str) -> int:
     """Count number of code blocks in content."""
+    if not content:
+        return 0
     return len(re.findall(r'```', content)) // 2
 
 
@@ -428,6 +442,8 @@ def optimize_skill_with_evals(
     verbose: bool = True,
     api_key: str = None,
     api_base: str = None,
+    preloaded_evals: dict = None,
+    from_scratch: bool = False,
 ) -> dict:
     """
     Three-phase skill optimization pipeline.
@@ -437,7 +453,7 @@ def optimize_skill_with_evals(
     Phase 3: Validate and output results with assertion pass rates
 
     Args:
-        skill_path: Path to the skill directory containing SKILL.md
+        skill_path: Path to the skill directory (SKILL.md optional when from_scratch=True)
         evals_path: Path to evals.json with test cases
         output_path: Directory to save optimized skill and benchmark
         model: LLM model in litellm format (default: openai/gpt-4o)
@@ -445,6 +461,8 @@ def optimize_skill_with_evals(
         dry_run: If True, only run Phase 1 (load/generate evals)
         generate_evals: If True, auto-generate eval cases when none provided
         verbose: Print progress information
+        from_scratch: If True, create a new skill from scratch using benchmark evals
+                      as the target (no existing SKILL.md required)
 
     Returns:
         dict with optimization results including assertion pass rates
@@ -453,24 +471,36 @@ def optimize_skill_with_evals(
     parser = SkillParser()
     analyzer = SkillAnalyzer()
 
-    if not skill_path.exists():
-        raise FileNotFoundError(f"Skill not found: {skill_path}")
+    skill_name = skill_path.name
+    skill_content = None  # None = seedless GEPA mode (generate from scratch)
+    report = None
 
-    skill = parser.parse_directory(skill_path)
-    skill_content = skill.main_file.raw_content
+    if from_scratch:
+        # No existing skill needed — GEPA will generate the first candidate
+        skill_path.mkdir(parents=True, exist_ok=True)
+        if verbose:
+            print(f"Creating new skill from scratch: {skill_name}")
+            print("  Seed: none (GEPA will generate the first candidate)")
+    else:
+        if not skill_path.exists():
+            raise FileNotFoundError(f"Skill not found: {skill_path}")
 
-    if verbose:
-        print(f"Loaded skill: {skill.name}")
-        print(f"  Lines: {skill.total_lines}")
-        print(f"  References: {len(skill.references)}")
+        skill = parser.parse_directory(skill_path)
+        skill_content = skill.main_file.raw_content
+        skill_name = skill.name
 
-    # Analyze
-    report = analyzer.analyze(skill)
-    if verbose:
-        errors = sum(1 for i in report.issues if i.severity == 'error')
-        warnings = sum(1 for i in report.issues if i.severity == 'warning')
-        suggestions = sum(1 for i in report.issues if i.severity == 'suggestion')
-        print(f"\nAnalysis: {report.score}/100 ({errors} errors, {warnings} warnings, {suggestions} suggestions)")
+        if verbose:
+            print(f"Loaded skill: {skill_name}")
+            print(f"  Lines: {skill.total_lines}")
+            print(f"  References: {len(skill.references)}")
+
+        # Analyze existing skill
+        report = analyzer.analyze(skill)
+        if verbose:
+            errors = sum(1 for i in report.issues if i.severity == 'error')
+            warnings = sum(1 for i in report.issues if i.severity == 'warning')
+            suggestions = sum(1 for i in report.issues if i.severity == 'suggestion')
+            print(f"\nAnalysis: {report.score}/100 ({errors} errors, {warnings} warnings, {suggestions} suggestions)")
 
     # ==================================================================
     # Phase 1: Load / Generate Evals & Assertions
@@ -480,14 +510,21 @@ def optimize_skill_with_evals(
         print("PHASE 1: Load evals and generate assertions")
         print("=" * 60)
 
-    if evals_path and evals_path.exists():
+    if preloaded_evals is not None:
+        evals_data = preloaded_evals
+        if verbose:
+            benchmark = evals_data.get("benchmark", "custom")
+            bsplit = evals_data.get("benchmark_split", "")
+            print(f"Loaded evals from benchmark: {benchmark}/{bsplit}")
+            print(f"  Eval cases: {len(evals_data.get('evals', []))}")
+    elif evals_path and evals_path.exists():
         evals_data = load_evals(evals_path)
         if verbose:
             print(f"Loaded evals from: {evals_path}")
             print(f"  Skill: {evals_data.get('skill_name', 'unknown')}")
             print(f"  Eval cases: {len(evals_data.get('evals', []))}")
     elif generate_evals:
-        evals_data = auto_generate_evals(skill_content, skill.name, model=model, verbose=verbose,
+        evals_data = auto_generate_evals(skill_content or "", skill_name, model=model, verbose=verbose,
                                           api_key=api_key, api_base=api_base)
         if verbose:
             print(f"  Generated {len(evals_data.get('evals', []))} eval case(s)")
@@ -504,7 +541,7 @@ def optimize_skill_with_evals(
         if verbose:
             print(f"\nGenerating assertions for {len(cases_without)} eval case(s)...")
         evals_data = generate_assertions_for_evals(
-            evals_data, skill_content, model=model, verbose=verbose,
+            evals_data, skill_content or "", model=model, verbose=verbose,
             api_key=api_key, api_base=api_base,
         )
         eval_cases = evals_data.get("evals", [])
@@ -519,11 +556,10 @@ def optimize_skill_with_evals(
             if len(assertions) > 3:
                 print(f"      ... and {len(assertions) - 3} more")
 
-    # Save evals with assertions
-    if evals_path:
-        evals_out = evals_path.parent / "evals_with_assertions.json"
-    else:
-        evals_out = skill_path / "evals_with_assertions.json"
+    # Save evals with assertions into the output directory
+    evals_out_dir = Path(output_path) if output_path else skill_path
+    evals_out_dir.mkdir(parents=True, exist_ok=True)
+    evals_out = evals_out_dir / "evals_with_assertions.json"
     with open(evals_out, "w") as f:
         json.dump(evals_data, f, indent=2)
     if verbose:
@@ -533,7 +569,7 @@ def optimize_skill_with_evals(
         if verbose:
             print("\nDry run complete. Evals loaded/generated, no optimization performed.")
         return {
-            "skill": skill,
+            "skill_name": skill_name,
             "report": report,
             "evals": evals_data,
             "dry_run": True,
@@ -547,34 +583,60 @@ def optimize_skill_with_evals(
         print("PHASE 2: GEPA optimization with eval-based metric")
         print("=" * 60)
 
-    issues_str = "\n".join([
-        f"- [{issue.severity}] {issue.category}: {issue.message}"
-        for issue in report.issues[:20]
-    ])
-
     eval_cases_str = format_eval_cases(eval_cases)
 
-    objective = (
-        "Optimize this Claude Agent Skill (SKILL.md) to be effective, concise, and "
-        "satisfy all evaluation criteria. The skill must contain the knowledge, commands, "
-        "and workflows needed for an agent to handle all test cases and pass all assertions. "
-        "The output must be a complete, valid SKILL.md file starting with --- frontmatter."
-    )
+    if from_scratch:
+        objective = (
+            "Write a new Claude Agent Skill (SKILL.md) from scratch that enables an agent "
+            "to handle all evaluation test cases and pass all assertions. "
+            "The skill must be concise, actionable, and contain only the knowledge, commands, "
+            "and workflows the agent actually needs. "
+            "The output must be a complete, valid SKILL.md file starting with --- frontmatter "
+            "that includes name and description fields."
+        )
+        background = (
+            f"Evaluation test cases the new skill must support:\n{eval_cases_str}\n\n"
+            "Skill writing guidelines:\n"
+            "- Start with YAML frontmatter: --- name: <name>\\ndescription: Use when...\\n---\n"
+            "- Use ## section headers for workflow steps\n"
+            "- Include concrete commands and examples, not generic advice\n"
+            "- Skip concepts the agent already knows (JSON, REST APIs, etc.)\n"
+            "- Aim for 50-200 lines — comprehensive but not bloated"
+        )
+    else:
+        issues_str = "\n".join([
+            f"- [{issue.severity}] {issue.category}: {issue.message}"
+            for issue in report.issues[:20]
+        ]) if report else ""
 
-    background = (
-        f"Issues found by the skill analyzer:\n{issues_str}\n\n"
-        f"Evaluation test cases the optimized skill must support:\n{eval_cases_str}\n\n"
-        "Optimization guidelines:\n"
-        "- Remove filler phrases: 'make sure to', 'ensure that', 'don't forget to'\n"
-        "- Don't explain concepts Claude already knows (YAML, JSON, APIs, etc.)\n"
-        "- Preserve frontmatter (--- name/description ---), section headers (##), "
-        "and essential code blocks\n"
-        "- Consolidate similar commands using placeholders (e.g., -n <namespace>)\n"
-        "- Target 30-70% size reduction"
-    )
+        objective = (
+            "Optimize this Claude Agent Skill (SKILL.md) to be effective, concise, and "
+            "satisfy all evaluation criteria. The skill must contain the knowledge, commands, "
+            "and workflows needed for an agent to handle all test cases and pass all assertions. "
+            "The output must be a complete, valid SKILL.md file starting with --- frontmatter."
+        )
+        background = (
+            f"Issues found by the skill analyzer:\n{issues_str}\n\n"
+            f"Evaluation test cases the optimized skill must support:\n{eval_cases_str}\n\n"
+            "Optimization guidelines:\n"
+            "- Remove filler phrases: 'make sure to', 'ensure that', 'don't forget to'\n"
+            "- Don't explain concepts Claude already knows (YAML, JSON, APIs, etc.)\n"
+            "- Preserve frontmatter (--- name/description ---), section headers (##), "
+            "and essential code blocks\n"
+            "- Consolidate similar commands using placeholders (e.g., -n <namespace>)\n"
+            "- Target 30-70% size reduction"
+        )
 
     evaluator = create_eval_evaluator(skill_content, eval_cases, model=model,
                                       api_key=api_key, api_base=api_base)
+
+    # Set up trajectory logger
+    trajectory_logger = None
+    if output_path:
+        trajectory_logger = TrajectoryLogger(Path(output_path) / "trajectory")
+        evaluator = trajectory_logger.wrap(evaluator)
+        if verbose:
+            print(f"  Trajectory logging: {trajectory_logger.trajectory_dir}")
 
     total_assertions = sum(len(e.get("expectations", [])) for e in eval_cases)
     if verbose:
@@ -591,7 +653,7 @@ def optimize_skill_with_evals(
         os.environ.setdefault("OPENAI_API_BASE", api_base)
 
     result = optimize_anything(
-        seed_candidate=skill_content,
+        seed_candidate=skill_content,  # None when from_scratch=True (GEPA generates first candidate)
         evaluator=evaluator,
         objective=objective,
         background=background,
@@ -612,6 +674,14 @@ def optimize_skill_with_evals(
     if isinstance(optimized_content, dict):
         optimized_content = list(optimized_content.values())[0]
 
+    if trajectory_logger is not None:
+        summary_path = trajectory_logger.save_summary(
+            result,
+            metadata={"skill_name": skill_name, "model": model, "max_metric_calls": max_evals},
+        )
+        if verbose:
+            print(f"\nTrajectory summary saved: {summary_path}")
+
     if verbose:
         print("\nGEPA optimization complete")
 
@@ -630,14 +700,14 @@ def optimize_skill_with_evals(
     )
 
     # Static analysis
-    static = static_analysis_score(optimized_content, skill_content)
+    static = static_analysis_score(optimized_content, skill_content or "")
     combined = 0.40 * static + 0.60 * final_assertion_score
 
     # Metrics
-    original_len = len(skill_content)
+    original_len = len(skill_content) if skill_content else 0
     optimized_len = len(optimized_content)
     reduction_pct = ((original_len - optimized_len) / original_len * 100) if original_len > 0 else 0
-    orig_blocks = count_code_blocks(skill_content)
+    orig_blocks = count_code_blocks(skill_content or "")
     opt_blocks = count_code_blocks(optimized_content)
 
     if verbose:
@@ -664,7 +734,8 @@ def optimize_skill_with_evals(
 
         benchmark = {
             "metadata": {
-                "skill_name": skill.name,
+                "skill_name": skill_name,
+                "from_scratch": from_scratch,
                 "model": model,
                 "optimizer": "GEPA optimize_anything",
                 "max_metric_calls": max_evals,
@@ -695,7 +766,7 @@ def optimize_skill_with_evals(
             print(f"  benchmark.json - evaluation results")
 
     return {
-        "skill": skill,
+        "skill_name": skill_name,
         "report": report,
         "evals": evals_data,
         "optimized_content": optimized_content,
@@ -722,12 +793,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python optimize_skill_with_evals.py examples/example_1/Bad_Kubernetes_Helper_Skill \\
-      --evals examples/example_1/kubernetes-skill-workspace/evals.json
-
-  python optimize_skill_with_evals.py my-skill/ --generate-evals
-
-  python optimize_skill_with_evals.py my-skill/ --evals evals.json --dry-run
+  python optimize_skill_with_evals.py <skill_directory> --evals <evals.json>
+  python optimize_skill_with_evals.py <skill_directory> --generate-evals
+  python optimize_skill_with_evals.py <skill_directory> --benchmark tau-bench --benchmark-split airline
+  python optimize_skill_with_evals.py <new_directory> --from-scratch --benchmark searchqa
+  python optimize_skill_with_evals.py <skill_directory> --evals evals.json --dry-run
         """,
     )
 
@@ -737,19 +807,52 @@ Examples:
     p.add_argument("--model", default="openai/gpt-4o", help="LLM model in litellm format (default: openai/gpt-4o)")
     p.add_argument("--max-evals", type=int, default=10, help="Max GEPA metric calls (default: 10)")
     p.add_argument("--generate-evals", action="store_true", help="Auto-generate eval cases if none provided")
+    p.add_argument("--from-scratch", action="store_true",
+                   help="Create a new skill from scratch using benchmark/evals as target "
+                        "(no existing SKILL.md required)")
     p.add_argument("--dry-run", action="store_true", help="Phase 1 only: load/generate evals, skip optimization")
     p.add_argument("--api-key", default=None, help="API key (default: OPENAI_API_KEY or API_KEY env var)")
     p.add_argument("--api-base", default=None, help="API base URL for OpenAI-compatible endpoints (e.g. http://localhost:11434/v1 for Ollama)")
     p.add_argument("-q", "--quiet", action="store_true", help="Suppress verbose output")
+    # Benchmark flags
+    p.add_argument("--benchmark", choices=["tau-bench", "swe-bench", "searchqa"],
+                   help="Load eval cases from a standard benchmark instead of evals.json")
+    p.add_argument("--benchmark-split", default=None,
+                   help="TAU-bench domain (airline, retail, telecom, banking_knowledge) or "
+                        "SWE-bench split (test, dev). Defaults: airline / test")
+    p.add_argument("--benchmark-data", type=Path, default=None,
+                   help="Path to a local tau-bench/tau2-bench repo clone (tau-bench only). "
+                        "If omitted, tasks are fetched from GitHub.")
+    p.add_argument("--benchmark-variant", default="swe-bench",
+                   choices=["swe-bench", "swe-bench-verified", "swe-bench-lite"],
+                   help="SWE-bench dataset variant (default: swe-bench)")
 
     args = p.parse_args()
 
-    # Default output path
+    # Default output path: output/<skill-name>-<timestamp>/
     if args.output is None and not args.dry_run:
-        args.output = Path(f"{args.skill_path}_GEPA_Eval_Optimized")
+        args.output = make_run_dir(args.skill_path.name)
 
-    # Auto-discover evals.json if not provided
-    if args.evals is None and not args.generate_evals:
+    # Resolve eval source: benchmark > explicit file > auto-discover > generate
+    benchmark_evals_data = None
+    if args.benchmark:
+        if not args.quiet:
+            print(f"Loading evals from benchmark: {args.benchmark} "
+                  f"(split: {args.benchmark_split or 'default'})")
+        try:
+            benchmark_evals_data = load_benchmark(
+                name=args.benchmark,
+                split=args.benchmark_split,
+                data_path=args.benchmark_data,
+                n=3,
+                variant=args.benchmark_variant,
+            )
+        except Exception as exc:
+            print(f"Error loading benchmark: {exc}", file=sys.stderr)
+            return 1
+
+    # Auto-discover evals.json if not provided and no benchmark
+    if args.evals is None and not args.generate_evals and not benchmark_evals_data:
         candidates = [
             args.skill_path / "evals" / "evals.json",
             args.skill_path.parent / f"{args.skill_path.name}-workspace" / "evals.json",
@@ -762,8 +865,9 @@ Examples:
                     print(f"Auto-discovered evals: {c}")
                 break
 
-    if args.evals is None and not args.generate_evals:
-        print("Error: No evals.json found. Provide --evals <path> or use --generate-evals", file=sys.stderr)
+    if args.evals is None and not args.generate_evals and not benchmark_evals_data:
+        print("Error: No evals.json found. Provide --evals <path>, --generate-evals, "
+              "or --benchmark <name>", file=sys.stderr)
         return 1
 
     try:
@@ -778,6 +882,8 @@ Examples:
             verbose=not args.quiet,
             api_key=args.api_key,
             api_base=args.api_base,
+            preloaded_evals=benchmark_evals_data,
+            from_scratch=args.from_scratch,
         )
 
         if not args.quiet:

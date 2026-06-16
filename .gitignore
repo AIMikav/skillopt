@@ -28,3 +28,7 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# Generated output directories and artifacts
+output/
+evals_with_assertions.json
